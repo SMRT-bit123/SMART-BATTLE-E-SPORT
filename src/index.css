@@ -1,0 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #9333ea; /* purple-600 */
+  --color-secondary: #4f46e5; /* indigo-600 */
+  --color-accent: #f43f5e; /* rose-500 */
+  --color-background: #000000; 
+  --color-surface: #0a0a0a;
+  --color-surface-lighter: #171717;
+  
+  --font-sans: "Inter", sans-serif;
+  --font-display: "Outfit", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-white font-sans selection:bg-purple-500/30 antialiased tracking-tight;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display font-black tracking-tighter;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-black/50 backdrop-blur-md border border-white/5;
+  }
+  .glass-purple {
+    @apply bg-purple-900/10 backdrop-blur-md border border-purple-500/20;
+  }
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-linear-to-r from-purple-500 to-indigo-500;
+  }
+  .gradient-bg {
+    @apply bg-linear-to-br from-purple-600 to-indigo-600;
+  }
+  .card-hover {
+    @apply transition-all duration-300 hover:scale-[1.01] hover:border-purple-500/40 active:scale-[0.99] hover:shadow-[0_0_20px_rgba(147,51,234,0.15)];
+  }
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(168, 85, 247, 0.2);
+    border-radius: 20px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(168, 85, 247, 0.4);
+  }
+}
