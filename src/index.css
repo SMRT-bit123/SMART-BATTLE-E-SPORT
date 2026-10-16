@@ -14,11 +14,17 @@
 }
 
 @layer base {
-  body {
+  html, body {
     @apply bg-background text-white font-sans selection:bg-purple-500/30 antialiased tracking-tight;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
   }
   h1, h2, h3, h4, h5, h6 {
     @apply font-display font-black tracking-tighter;
+  }
+  img {
+    content-visibility: auto;
   }
 }
 

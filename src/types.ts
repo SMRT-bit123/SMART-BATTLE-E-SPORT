@@ -87,6 +87,10 @@ export interface Transaction {
   redeemCode?: string;
   redeemContact?: string;
   redeemType?: 'google_play' | 'free_fire';
+  utrNumber?: string;
+  payeeName?: string;
+  userEmail?: string;
+  rejectionReason?: string;
   createdAt: any;
 }
 

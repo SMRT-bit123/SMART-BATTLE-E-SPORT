@@ -47,7 +47,8 @@ export default function HomeHeader({ user, onPageChange, onOpenNotifications }: 
         >
           <div className="w-11 h-11 rounded-2xl bg-gradient-to-b from-[#162238] to-[#0a1220] p-1 border border-cyan-500/30 shadow-lg shadow-cyan-500/10 flex items-center justify-center overflow-hidden">
             <img 
-              src="/src/assets/images/regenerated_image_1791755565035.png" 
+              src="/logo.png" 
+              onError={(e) => { e.currentTarget.src = '/logo.svg'; }}
               alt="SMART BATTLE Logo" 
               className="w-full h-full object-contain"
             />

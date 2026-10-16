@@ -103,7 +103,8 @@ export default function HeroBannerCarousel({ banners, onPageChange }: HeroBanner
                 {/* Character Left Artwork */}
                 <div className="relative z-10 w-28 sm:w-36 h-full flex items-end">
                   <img
-                    src="/src/assets/images/regenerated_image_1791755567104.png"
+                    src="/images/regenerated_image_1791755567104.png"
+                    onError={(e) => { e.currentTarget.src = '/logo.png'; }}
                     alt="Free Fire Hero"
                     className="w-full h-full object-cover rounded-xl shadow-md border border-white/60"
                   />

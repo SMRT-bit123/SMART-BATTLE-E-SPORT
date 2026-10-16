@@ -6,7 +6,8 @@ import { collection, query, orderBy, limit, onSnapshot, getDocs, where } from 'f
 import { User } from '../types';
 import SafeImage from '../components/SafeImage';
 
-const APP_LOGO = "/src/assets/images/regenerated_image_1791755565035.png";
+const APP_LOGO = "/logo.png";
+const VECTOR_LOGO = "/logo.svg";
 
 type LeaderboardTab = 'weekly' | 'monthly';
 
@@ -176,7 +177,12 @@ export default function Leaderboard() {
               className="w-16 h-16 p-1 bg-linear-to-tr from-purple-500/20 to-transparent border border-purple-500/30 rounded-2xl"
             >
               <div className="w-full h-full rounded-xl overflow-hidden bg-black shadow-[0_0_20px_rgba(168,85,247,0.2)]">
-                <img src={APP_LOGO} alt="Loading" className="w-full h-full scale-90" />
+                <img 
+                  src={APP_LOGO} 
+                  onError={(e) => { e.currentTarget.src = VECTOR_LOGO; }}
+                  alt="Loading" 
+                  className="w-full h-full scale-90 object-contain" 
+                />
               </div>
             </motion.div>
             <div className="space-y-2 text-center">
@@ -195,7 +201,12 @@ export default function Leaderboard() {
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <div className="w-20 h-20 mb-6 relative">
               <div className="absolute inset-0 bg-purple-500/10 blur-2xl rounded-full" />
-              <img src={APP_LOGO} alt="No Data" className="w-full h-full opacity-20 filter grayscale" />
+              <img 
+                src={APP_LOGO} 
+                onError={(e) => { e.currentTarget.src = VECTOR_LOGO; }}
+                alt="No Data" 
+                className="w-full h-full opacity-20 filter grayscale object-contain" 
+              />
             </div>
             <h3 className="text-xl font-black italic uppercase tracking-tighter text-neutral-600 mb-2">No Rankings Yet</h3>
             <p className="text-[10px] text-neutral-700 uppercase tracking-widest font-bold">Be the first to dominate the arena</p>

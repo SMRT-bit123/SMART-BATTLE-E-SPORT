@@ -14,10 +14,10 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && (
         request.auth.uid == "XoXyXcnrlzOaMIKKolXnU3mT9xn1" ||
-        request.auth.token.email == "qupagaming@gmail.com" || 
-        request.auth.token.email == "mahendrathakur9009@gmail.com" ||
-        request.auth.token.email == "mahendrar9009@gmail.com" ||
-        request.auth.token.email == "ankushsharma3948@gmail.com"
+        request.auth.token.email.lower() == "qupagaming@gmail.com" || 
+        request.auth.token.email.lower() == "mahendrathakur9009@gmail.com" ||
+        request.auth.token.email.lower() == "mahendrar9009@gmail.com" ||
+        request.auth.token.email.lower() == "ankushsharma3948@gmail.com"
       );
     }
 
@@ -106,7 +106,7 @@ service cloud.firestore {
         resource.data.type == 'win'
       );
       allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || isAdmin());
-      allow update, delete: if false;
+      allow update, delete: if isAdmin();
     }
 
     // App Settings: Global configs

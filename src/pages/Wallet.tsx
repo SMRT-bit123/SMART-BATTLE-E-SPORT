@@ -475,17 +475,30 @@ export default function WalletPage({ user, onPageChange }: WalletPageProps) {
                           <p className="font-black text-[#172033] uppercase text-[11px] truncate">
                             {tx.title || tx.type}
                           </p>
-                          <p className="text-[9px] font-bold text-slate-400 mt-0.5">
-                            {formatTransactionDate(tx.createdAt)}
-                          </p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[9px] font-bold text-slate-400">
+                              {formatTransactionDate(tx.createdAt)}
+                            </span>
+                            {tx.utrNumber && (
+                              <span className="text-[9px] font-mono font-bold text-purple-600 bg-purple-50 px-1.5 py-0.2 rounded border border-purple-200">
+                                UTR: {tx.utrNumber}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="text-right shrink-0">
                           <p className={`font-black text-xs ${credit ? 'text-[#16A34A]' : 'text-[#DC2626]'}`}>
                             {credit ? '+' : '-'}₹{tx.amount}
                           </p>
-                          <p className="text-[8px] font-black uppercase text-slate-500">
+                          <span className={`inline-block text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                            tx.status === 'completed'
+                              ? 'text-emerald-700 bg-emerald-100'
+                              : tx.status === 'pending'
+                              ? 'text-amber-700 bg-amber-100'
+                              : 'text-red-700 bg-red-100'
+                          }`}>
                             {tx.status}
-                          </p>
+                          </span>
                         </div>
                       </div>
                     );

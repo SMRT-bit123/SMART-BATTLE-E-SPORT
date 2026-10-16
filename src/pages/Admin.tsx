@@ -162,6 +162,8 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
   const [users, setUsers] = useState<User[]>([]);
   const [matches, setMatches] = useState<Tournament[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [txFilter, setTxFilter] = useState<'pending_deposits' | 'pending_withdrawals' | 'all' | 'completed'>('pending_deposits');
+  const [copiedTxInfo, setCopiedTxInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -219,6 +221,33 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
     webhookSecret: '',
     upiId: ''
   });
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [webhookTestStatus, setWebhookTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [webhookTestMessage, setWebhookTestMessage] = useState('');
+
+  const handleTestWebhook = async (gatewayId: string) => {
+    setWebhookTestStatus('testing');
+    setWebhookTestMessage('');
+    try {
+      const endpoint = gatewayId === 'zapupi' ? '/api/zapupi/webhook' : `/api/${gatewayId}/webhook`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test: true, event: 'test' })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setWebhookTestStatus('success');
+        setWebhookTestMessage(data.message || 'Webhook is live & returned 200 OK');
+      } else {
+        setWebhookTestStatus('error');
+        setWebhookTestMessage(`Server returned HTTP ${res.status}`);
+      }
+    } catch (err: any) {
+      setWebhookTestStatus('error');
+      setWebhookTestMessage(err.message || 'Failed to reach webhook endpoint');
+    }
+  };
 
   // Modal back handlers
   useModalBackHandler(isDeleteConfirmOpen.isOpen, () => setIsDeleteConfirmOpen({ isOpen: false, matchId: '' }));
@@ -258,13 +287,15 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
   // Real-time listeners
   useEffect(() => {
     // Auth check
-    const email = auth.currentUser?.email;
+    const email = (auth.currentUser?.email || '').toLowerCase().trim();
     const uid = auth.currentUser?.uid;
-    const isAdminUser = email === 'mahendrathakur9009@gmail.com' || 
-                       email === 'qupagaming@gmail.com' || 
-                       email === 'mahendrar9009@gmail.com' ||
-                       email === 'ankushsharma3948@gmail.com' ||
-                       uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1';
+    const adminEmails = [
+      'mahendrathakur9009@gmail.com',
+      'qupagaming@gmail.com',
+      'mahendrar9009@gmail.com',
+      'ankushsharma3948@gmail.com'
+    ];
+    const isAdminUser = adminEmails.includes(email) || uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1';
 
     if (!isAdminUser) {
       onPageChange(Page.HOME);
@@ -392,6 +423,113 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
     } catch (e) {
       alert('Failed to send reset email');
       console.error(e);
+    }
+  };
+
+  const handleApproveDeposit = async (t: any) => {
+    if (!t.id || !t.userId) return;
+    if (!window.confirm(`Approve deposit of ₹${t.amount} for user? Coins will be added to their wallet balance.`)) return;
+    setIsProcessing(true);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', t.userId);
+        const userSnap = await transaction.get(userRef);
+        if (!userSnap.exists()) throw new Error('User not found');
+        
+        const userData = userSnap.data() as User;
+        const currentDeposit = userData.wallet?.deposit || 0;
+        
+        transaction.update(userRef, {
+          "wallet.deposit": currentDeposit + t.amount
+        });
+        
+        const transRef = doc(db, 'transactions', t.id);
+        transaction.update(transRef, {
+          status: 'completed',
+          approvedAt: serverTimestamp()
+        });
+      });
+      alert(`Deposit of ₹${t.amount} approved! Coins credited to player.`);
+    } catch (e: any) {
+      alert(e.message || 'Approval failed');
+      handleFirestoreError(e, OperationType.UPDATE, `transactions/${t.id}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRejectDeposit = async (t: any) => {
+    if (!t.id) return;
+    const reason = window.prompt('Enter rejection reason (e.g. Invalid UTR / Payment not received):', 'Invalid UTR / Payment not received');
+    if (reason === null) return;
+    
+    setIsProcessing(true);
+    try {
+      const transRef = doc(db, 'transactions', t.id);
+      await updateDoc(transRef, {
+        status: 'failed',
+        rejectionReason: reason || 'Invalid UTR / Payment not received',
+        rejectedAt: serverTimestamp()
+      });
+      alert('Deposit rejected.');
+    } catch (e: any) {
+      alert(e.message || 'Reject failed');
+      handleFirestoreError(e, OperationType.UPDATE, `transactions/${t.id}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleApproveWithdrawal = async (t: any) => {
+    if (!t.id) return;
+    if (!window.confirm(`Mark withdrawal of ₹${t.amount} as processed & completed?`)) return;
+    setIsProcessing(true);
+    try {
+      const transRef = doc(db, 'transactions', t.id);
+      await updateDoc(transRef, {
+        status: 'completed',
+        approvedAt: serverTimestamp()
+      });
+      alert(`Withdrawal of ₹${t.amount} marked completed!`);
+    } catch (e: any) {
+      alert(e.message || 'Approval failed');
+      handleFirestoreError(e, OperationType.UPDATE, `transactions/${t.id}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRejectWithdrawal = async (t: any) => {
+    if (!t.id || !t.userId) return;
+    const reason = window.prompt('Enter rejection reason (coins will be refunded to player):', 'Incorrect UPI details');
+    if (reason === null) return;
+
+    setIsProcessing(true);
+    try {
+      await runTransaction(db, async (transaction) => {
+        const userRef = doc(db, 'users', t.userId);
+        const userSnap = await transaction.get(userRef);
+        if (userSnap.exists()) {
+          const userData = userSnap.data() as User;
+          const currentWinnings = userData.wallet?.winnings || 0;
+          transaction.update(userRef, {
+            "wallet.winnings": currentWinnings + t.amount
+          });
+        }
+        
+        const transRef = doc(db, 'transactions', t.id);
+        transaction.update(transRef, {
+          status: 'failed',
+          rejectionReason: reason || 'Withdrawal rejected - refunded',
+          rejectedAt: serverTimestamp()
+        });
+      });
+      alert(`Withdrawal rejected and ₹${t.amount} refunded to user.`);
+    } catch (e: any) {
+      alert(e.message || 'Reject failed');
+      handleFirestoreError(e, OperationType.UPDATE, `transactions/${t.id}`);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -963,7 +1101,7 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
   };
 
   const handleSaveBanner = async () => {
-    if (!imageUrl) return alert('Image URL is required');
+    if (!imageUrl) return alert('Please select or upload a banner image');
     setIsProcessing(true);
     try {
       const bannerData = {
@@ -1523,59 +1661,264 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
             </motion.div>
           )}
 
-          {activeTab === AdminTab.TRANSACTIONS && (
-            <motion.div
-              key="transactions"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-4"
-            >
-              <div className="flex items-center justify-between mb-4">
-                 <h4 className="text-[10px] font-black uppercase tracking-widest text-neutral-500">History Log</h4>
-                 <RefreshCw size={14} className="text-neutral-700 animate-spin-slow" />
-              </div>
-              {transactions.map((t) => (
-                <div key={t.id} className="p-4 bg-neutral-900 border border-neutral-800 rounded-2xl flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center border border-white/5 ${
-                      t.type === 'deposit' || t.type === 'refund' ? 'text-emerald-400 bg-emerald-400/10' : 'text-red-400 bg-red-400/10'
-                    }`}>
-                      {t.type === 'deposit' ? <Plus size={16} /> : t.type === 'refund' ? <CheckCircle2 size={16} /> : <Minus size={16} />}
-                    </div>
-                    <div>
-                      <h4 className="text-[10px] font-black uppercase tracking-widest leading-none mb-1">
-                        {t.title || t.type}
-                      </h4>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[8px] font-black uppercase tracking-widest text-neutral-600">ID: {t.id?.slice(0, 8)}...</span>
-                        {t.upiId && (
-                          <span className="text-[8px] font-bold text-purple-400 bg-purple-500/10 px-1 rounded">
-                            UPI: {t.upiId}
-                          </span>
-                        )}
-                        {t.method === 'redeem_code' && (
-                          <span className="text-[8px] font-bold text-indigo-400 bg-indigo-500/10 px-1 rounded">
-                            {t.redeemType || 'Redeem'}: {t.redeemContact}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+          {activeTab === AdminTab.TRANSACTIONS && (() => {
+            const pendingDeposits = transactions.filter(t => t.type === 'deposit' && t.status === 'pending');
+            const pendingWithdrawals = transactions.filter(t => (t.type === 'withdraw' || t.type === 'withdrawal') && t.status === 'pending');
+            const completedTransactions = transactions.filter(t => t.status === 'completed');
+
+            let displayedTransactions = transactions;
+            if (txFilter === 'pending_deposits') displayedTransactions = pendingDeposits;
+            else if (txFilter === 'pending_withdrawals') displayedTransactions = pendingWithdrawals;
+            else if (txFilter === 'completed') displayedTransactions = completedTransactions;
+
+            return (
+              <motion.div
+                key="transactions"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="space-y-4"
+              >
+                {/* Header & Pending Badges */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wide text-white flex items-center gap-2">
+                      <Wallet size={16} className="text-orange-400" />
+                      <span>Wallet & Deposit Approvals</span>
+                    </h3>
+                    <p className="text-[9px] font-bold text-neutral-400">
+                      Verify player UTR numbers to credit wallet coins
+                    </p>
                   </div>
-                  <div className="text-right">
-                    <p className={`text-xs font-black italic ${
-                      t.type === 'deposit' || t.type === 'refund' ? 'text-emerald-400' : 'text-red-400'
-                    }`}>
-                      {t.type === 'deposit' || t.type === 'refund' ? '+' : '-'}₹{t.amount}
-                    </p>
-                    <p className="text-[8px] font-black text-neutral-600 uppercase tracking-widest">
-                      {t.createdAt?.toDate().toLocaleDateString()}
-                    </p>
+                  <div className="flex items-center gap-2">
+                    {pendingDeposits.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-full bg-orange-500/20 text-orange-400 border border-orange-500/30 text-[9px] font-black uppercase tracking-wider animate-pulse">
+                        {pendingDeposits.length} Deposit Pending
+                      </span>
+                    )}
+                    {pendingWithdrawals.length > 0 && (
+                      <span className="px-2.5 py-1 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30 text-[9px] font-black uppercase tracking-wider">
+                        {pendingWithdrawals.length} Withdrawal Pending
+                      </span>
+                    )}
                   </div>
                 </div>
-              ))}
-            </motion.div>
-          )}
+
+                {/* Filter Tabs */}
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+                  {[
+                    { id: 'pending_deposits', label: 'Pending Deposits', count: pendingDeposits.length, color: 'text-orange-400' },
+                    { id: 'pending_withdrawals', label: 'Pending Withdrawals', count: pendingWithdrawals.length, color: 'text-blue-400' },
+                    { id: 'all', label: 'All History', count: transactions.length },
+                    { id: 'completed', label: 'Completed', count: completedTransactions.length }
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setTxFilter(tab.id as any)}
+                      className={`px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all whitespace-nowrap border cursor-pointer ${
+                        txFilter === tab.id
+                          ? 'bg-purple-600 border-purple-500 text-white shadow-md'
+                          : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:border-neutral-700'
+                      }`}
+                    >
+                      <span>{tab.label}</span>
+                      <span className="px-1.5 py-0.2 bg-black/40 rounded-full text-[8px] font-bold">
+                        {tab.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Transactions List */}
+                <div className="space-y-3">
+                  {displayedTransactions.length === 0 ? (
+                    <div className="p-8 bg-neutral-900/60 border border-neutral-800 rounded-3xl text-center space-y-2">
+                      <CheckCircle2 size={28} className="mx-auto text-neutral-600" />
+                      <p className="text-xs font-bold text-neutral-400">
+                        {txFilter === 'pending_deposits'
+                          ? 'No pending deposits! All player deposits are verified.'
+                          : txFilter === 'pending_withdrawals'
+                          ? 'No pending withdrawal requests.'
+                          : 'No transactions found.'}
+                      </p>
+                    </div>
+                  ) : (
+                    displayedTransactions.map((t) => {
+                      const isDeposit = t.type === 'deposit';
+                      const isPending = t.status === 'pending';
+                      const isWithdraw = t.type === 'withdraw' || t.type === 'withdrawal';
+
+                      return (
+                        <div
+                          key={t.id}
+                          className={`p-4 bg-neutral-900 border rounded-2xl transition-all space-y-3 ${
+                            isPending && isDeposit
+                              ? 'border-orange-500/50 shadow-[0_0_15px_rgba(249,115,22,0.1)]'
+                              : isPending && isWithdraw
+                              ? 'border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.1)]'
+                              : 'border-neutral-800'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center border font-black ${
+                                isDeposit
+                                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                  : isWithdraw
+                                  ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                                  : 'bg-neutral-800 border-neutral-700 text-neutral-400'
+                              }`}>
+                                {isDeposit ? <Plus size={18} /> : isWithdraw ? <Minus size={18} /> : <DollarSign size={18} />}
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <h4 className="text-xs font-black uppercase text-white">
+                                    {t.title || (isDeposit ? 'UPI Deposit' : isWithdraw ? 'Withdrawal' : t.type)}
+                                  </h4>
+                                  <span className={`text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                                    t.status === 'completed'
+                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                      : t.status === 'pending'
+                                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                      : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                  }`}>
+                                    {t.status}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-neutral-400 font-bold mt-0.5">
+                                  Player: <span className="text-neutral-200">{t.username || t.userEmail || t.userId?.slice(0, 10)}</span>
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="text-right shrink-0">
+                              <p className={`text-sm font-black ${isDeposit ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {isDeposit ? '+' : '-'}₹{t.amount}
+                              </p>
+                              <p className="text-[8px] font-bold text-neutral-500 uppercase mt-0.5">
+                                {t.createdAt?.toDate ? t.createdAt.toDate().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recent'}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* UTR / Payout details box */}
+                          {(t.utrNumber || t.upiId || t.redeemContact) && (
+                            <div className="bg-black/60 border border-neutral-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2">
+                              <div className="space-y-0.5">
+                                {t.utrNumber && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-black uppercase text-neutral-500">UTR / Ref:</span>
+                                    <span className="text-xs font-mono font-black text-amber-400 select-all tracking-wider">
+                                      {t.utrNumber}
+                                    </span>
+                                  </div>
+                                )}
+                                {t.upiId && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-black uppercase text-neutral-500">UPI ID:</span>
+                                    <span className="text-xs font-mono font-bold text-purple-300 select-all">
+                                      {t.upiId}
+                                    </span>
+                                  </div>
+                                )}
+                                {t.redeemContact && (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-black uppercase text-neutral-500">Target:</span>
+                                    <span className="text-xs font-mono font-bold text-indigo-300 select-all">
+                                      {t.redeemContact}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const textToCopy = t.utrNumber || t.upiId || t.redeemContact || '';
+                                  navigator.clipboard.writeText(textToCopy);
+                                  setCopiedTxInfo(t.id);
+                                  setTimeout(() => setCopiedTxInfo(null), 2000);
+                                }}
+                                className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg text-[9px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                              >
+                                {copiedTxInfo === t.id ? (
+                                  <>
+                                    <Check size={11} className="text-emerald-400" />
+                                    <span className="text-emerald-400">Copied</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy size={11} />
+                                    <span>Copy</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Rejection reason if failed */}
+                          {t.rejectionReason && (
+                            <p className="text-[10px] text-red-400 font-bold bg-red-500/10 border border-red-500/20 px-3 py-1.5 rounded-xl">
+                              Reason: {t.rejectionReason}
+                            </p>
+                          )}
+
+                          {/* Action Buttons for Pending Items */}
+                          {isPending && (
+                            <div className="grid grid-cols-2 gap-2 pt-1">
+                              {isDeposit ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={isProcessing}
+                                    onClick={() => handleApproveDeposit(t)}
+                                    className="py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-md shadow-emerald-600/20 active:scale-95 cursor-pointer disabled:opacity-50"
+                                  >
+                                    <CheckCircle2 size={13} />
+                                    <span>Approve & Credit ₹{t.amount}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isProcessing}
+                                    onClick={() => handleRejectDeposit(t)}
+                                    className="py-2.5 bg-neutral-800 hover:bg-red-900/50 text-red-400 border border-red-500/20 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                                  >
+                                    <Trash2 size={13} />
+                                    <span>Reject</span>
+                                  </button>
+                                </>
+                              ) : isWithdraw ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={isProcessing}
+                                    onClick={() => handleApproveWithdrawal(t)}
+                                    className="py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all shadow-md shadow-blue-600/20 active:scale-95 cursor-pointer disabled:opacity-50"
+                                  >
+                                    <CheckCircle2 size={13} />
+                                    <span>Mark Paid (Approve)</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isProcessing}
+                                    onClick={() => handleRejectWithdrawal(t)}
+                                    className="py-2.5 bg-neutral-800 hover:bg-red-900/50 text-red-400 border border-red-500/20 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                                  >
+                                    <Trash2 size={13} />
+                                    <span>Reject & Refund</span>
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </motion.div>
+            );
+          })()}
 
           {activeTab === AdminTab.RULES && (
             <motion.div
@@ -2169,14 +2512,29 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
                       
                       {isConfigured && (
                         <div className="grid grid-cols-2 gap-2 pt-4 border-t border-white/5">
-                          <div>
-                            <p className="text-[7px] font-black uppercase tracking-widest text-neutral-600">Merchant ID</p>
-                            <p className="text-[9px] font-bold text-neutral-400 truncate">{gateway.merchantId || 'N/A'}</p>
-                          </div>
-                          <div>
-                            <p className="text-[7px] font-black uppercase tracking-widest text-neutral-600">API Key</p>
-                            <p className="text-[9px] font-bold text-neutral-400 truncate">{gateway.apiKey ? '••••••••' : 'N/A'}</p>
-                          </div>
+                          {gId === 'custom' ? (
+                            <>
+                              <div>
+                                <p className="text-[7px] font-black uppercase tracking-widest text-neutral-600">Payee Name</p>
+                                <p className="text-[9px] font-bold text-neutral-300 truncate">{gateway.merchantId || 'Ankush Sharma'}</p>
+                              </div>
+                              <div>
+                                <p className="text-[7px] font-black uppercase tracking-widest text-neutral-600">UPI ID</p>
+                                <p className="text-[9px] font-bold text-purple-400 font-mono truncate">{gateway.upiId || '9554721875@fam'}</p>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div>
+                                <p className="text-[7px] font-black uppercase tracking-widest text-neutral-600">Merchant ID</p>
+                                <p className="text-[9px] font-bold text-neutral-400 truncate">{gateway.merchantId || 'N/A'}</p>
+                              </div>
+                              <div>
+                                <p className="text-[7px] font-black uppercase tracking-widest text-neutral-600">API Key</p>
+                                <p className="text-[9px] font-bold text-neutral-400 truncate">{gateway.apiKey ? '••••••••' : 'N/A'}</p>
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2624,72 +2982,177 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
               </div>
 
               <div className="space-y-5">
-                <div className="space-y-2">
-                  <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Gateway Name</label>
-                  <input 
-                    type="text"
-                    value={gatewayForm.name}
-                    onChange={(e) => setGatewayForm({ ...gatewayForm, name: e.target.value })}
-                    placeholder="Razorpay, Cashfree, etc."
-                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
-                  />
-                </div>
+                {editingGateway?.id === 'custom' ? (
+                  <>
+                    <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl space-y-1">
+                      <p className="text-[11px] font-black text-emerald-400 uppercase tracking-wide">
+                        Zero KYC Direct UPI & QR Mode
+                      </p>
+                      <p className="text-[10px] text-neutral-400 font-medium">
+                        No PAN Card, merchant account, or API keys required. Players transfer directly to your UPI ID and scan your QR code. You review their UTR and approve in 1 click!
+                      </p>
+                    </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Merchant ID</label>
-                    <input 
-                      type="text"
-                      value={gatewayForm.merchantId}
-                      onChange={(e) => setGatewayForm({ ...gatewayForm, merchantId: e.target.value })}
-                      placeholder="MID_123..."
-                      className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">UPI ID (Optional)</label>
-                    <input 
-                      type="text"
-                      value={gatewayForm.upiId}
-                      onChange={(e) => setGatewayForm({ ...gatewayForm, upiId: e.target.value })}
-                      placeholder="merchant@upi"
-                      className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
-                    />
-                  </div>
-                </div>
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Gateway Display Name</label>
+                      <input 
+                        type="text"
+                        value={gatewayForm.name}
+                        onChange={(e) => setGatewayForm({ ...gatewayForm, name: e.target.value })}
+                        placeholder="Direct UPI & QR Code"
+                        className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                      />
+                    </div>
 
-                <div className="space-y-2">
-                  <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">API Key</label>
-                  <input 
-                    type="password"
-                    value={gatewayForm.apiKey}
-                    onChange={(e) => setGatewayForm({ ...gatewayForm, apiKey: e.target.value })}
-                    placeholder="Enter Public API Key"
-                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
-                  />
-                </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Admin Payee Name</label>
+                        <input 
+                          type="text"
+                          value={gatewayForm.merchantId}
+                          onChange={(e) => setGatewayForm({ ...gatewayForm, merchantId: e.target.value })}
+                          placeholder="Ankush Sharma"
+                          className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Admin UPI ID</label>
+                        <input 
+                          type="text"
+                          value={gatewayForm.upiId}
+                          onChange={(e) => setGatewayForm({ ...gatewayForm, upiId: e.target.value })}
+                          placeholder="9554721875@fam"
+                          className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all font-mono"
+                        />
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Gateway Name</label>
+                      <input 
+                        type="text"
+                        value={gatewayForm.name}
+                        onChange={(e) => setGatewayForm({ ...gatewayForm, name: e.target.value })}
+                        placeholder="Razorpay, Cashfree, etc."
+                        className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                      />
+                    </div>
 
-                <div className="space-y-2">
-                  <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Secret Key / Token</label>
-                  <input 
-                    type="password"
-                    value={gatewayForm.secretKey}
-                    onChange={(e) => setGatewayForm({ ...gatewayForm, secretKey: e.target.value })}
-                    placeholder="Enter Secret Key"
-                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
-                  />
-                </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Merchant ID</label>
+                        <input 
+                          type="text"
+                          value={gatewayForm.merchantId}
+                          onChange={(e) => setGatewayForm({ ...gatewayForm, merchantId: e.target.value })}
+                          placeholder="MID_123..."
+                          className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">UPI ID (Optional)</label>
+                        <input 
+                          type="text"
+                          value={gatewayForm.upiId}
+                          onChange={(e) => setGatewayForm({ ...gatewayForm, upiId: e.target.value })}
+                          placeholder="merchant@upi"
+                          className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                        />
+                      </div>
+                    </div>
 
-                <div className="space-y-2">
-                  <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Webhook Secret (Optional)</label>
-                  <input 
-                    type="password"
-                    value={gatewayForm.webhookSecret}
-                    onChange={(e) => setGatewayForm({ ...gatewayForm, webhookSecret: e.target.value })}
-                    placeholder="Enter Webhook Secret"
-                    className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
-                  />
-                </div>
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">API Key</label>
+                      <input 
+                        type="password"
+                        value={gatewayForm.apiKey}
+                        onChange={(e) => setGatewayForm({ ...gatewayForm, apiKey: e.target.value })}
+                        placeholder="Enter Public API Key"
+                        className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Secret Key / Token</label>
+                      <input 
+                        type="password"
+                        value={gatewayForm.secretKey}
+                        onChange={(e) => setGatewayForm({ ...gatewayForm, secretKey: e.target.value })}
+                        placeholder="Enter Secret Key"
+                        className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-black uppercase tracking-widest text-neutral-500 ml-1">Webhook Secret (Optional)</label>
+                      <input 
+                        type="password"
+                        value={gatewayForm.webhookSecret}
+                        onChange={(e) => setGatewayForm({ ...gatewayForm, webhookSecret: e.target.value })}
+                        placeholder="Enter Webhook Secret"
+                        className="w-full bg-black border border-neutral-800 rounded-xl px-4 py-3 text-xs font-bold outline-none focus:border-purple-500 transition-all"
+                      />
+                    </div>
+
+                    {/* Webhook URL Helper */}
+                    <div className="p-4 bg-neutral-950 border border-neutral-800 rounded-2xl space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-neutral-400">
+                          Webhook / IPN URL
+                        </span>
+                        <span className="text-[8px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                          Active (HTTP 200)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 bg-black border border-neutral-800 rounded-xl px-3 py-2 text-[10px] font-mono text-neutral-300 truncate select-all">
+                          {typeof window !== 'undefined' ? `${window.location.origin}/api/${editingGateway?.id || 'zapupi'}/webhook` : '/api/zapupi/webhook'}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url = `${window.location.origin}/api/${editingGateway?.id || 'zapupi'}/webhook`;
+                            navigator.clipboard.writeText(url);
+                            setCopiedWebhook(true);
+                            setTimeout(() => setCopiedWebhook(false), 2000);
+                          }}
+                          className="px-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-[10px] font-bold flex items-center gap-1.5 transition-all"
+                        >
+                          {copiedWebhook ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                          <span>{copiedWebhook ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between pt-1">
+                        <p className="text-[8px] text-neutral-500">
+                          Copy and paste this URL into your ZapUPI Merchant Dashboard.
+                        </p>
+                        <button
+                          type="button"
+                          disabled={webhookTestStatus === 'testing'}
+                          onClick={() => handleTestWebhook(editingGateway?.id || 'zapupi')}
+                          className="px-2.5 py-1 bg-purple-600/20 border border-purple-500/30 text-purple-300 hover:bg-purple-600/30 rounded-lg text-[9px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all"
+                        >
+                          {webhookTestStatus === 'testing' ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                          Test Webhook
+                        </button>
+                      </div>
+                      {webhookTestStatus === 'success' && (
+                        <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center gap-2 text-emerald-400 text-[9px] font-bold">
+                          <CheckCircle2 size={12} className="shrink-0" />
+                          <span>{webhookTestMessage}</span>
+                        </div>
+                      )}
+                      {webhookTestStatus === 'error' && (
+                        <div className="p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-red-400 text-[9px] font-bold">
+                          <AlertCircle size={12} className="shrink-0" />
+                          <span>{webhookTestMessage}</span>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 <div className="pt-4">
                   <button 

@@ -577,33 +577,24 @@ export default function AdminModes({ onPageChange }: AdminModesProps) {
                     ))}
                   </div>
 
-                  {/* Custom URL or Upload Input */}
-                  <div className="space-y-2">
-                    <div className="flex gap-2">
-                      <input 
-                        type="text"
-                        value={editingMode.image || ''}
-                        onChange={(e) => setEditingMode({ ...editingMode, image: e.target.value })}
-                        placeholder="https://image-url.jpg"
-                        className="flex-1 bg-black border border-white/10 rounded-xl px-3 py-2 text-xs font-medium focus:outline-none focus:border-purple-500 text-white"
-                      />
-                      <button 
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={isUploading}
-                        className="px-3 bg-neutral-800 border border-white/10 rounded-xl text-neutral-300 hover:text-white transition-all disabled:opacity-50 flex items-center gap-1 text-[9px] font-black uppercase"
-                      >
-                        {isUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                        <span>Upload</span>
-                      </button>
-                      <input 
-                        type="file"
-                        ref={fileInputRef}
-                        className="hidden"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                      />
-                    </div>
+                  {/* Upload Image from Device Button */}
+                  <div className="pt-2">
+                    <button 
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading}
+                      className="w-full h-11 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-md shadow-purple-500/20 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                      <span>{editingMode.image ? 'Change Image From Gallery / Files' : 'Select Image From Gallery / Device'}</span>
+                    </button>
+                    <input 
+                      type="file"
+                      ref={fileInputRef}
+                      className="hidden"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                    />
                   </div>
                 </div>
               </div>

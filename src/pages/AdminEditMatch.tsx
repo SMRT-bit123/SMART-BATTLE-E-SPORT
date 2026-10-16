@@ -30,6 +30,30 @@ const DEFAULT_MODES_FALLBACK: GameMode[] = [
 
 const PRESET_MATCH_THUMBNAILS = [
   {
+    name: 'Free Fire BR Duo',
+    url: '/images/regenerated_image_1791755547255.png'
+  },
+  {
+    name: 'Free Fire BR Solo',
+    url: '/images/regenerated_image_1791735926796.jpg'
+  },
+  {
+    name: 'Free Fire BR Squad',
+    url: '/images/regenerated_image_1791755551692.png'
+  },
+  {
+    name: 'Free Match Entry',
+    url: '/images/regenerated_image_1791756013539.png'
+  },
+  {
+    name: 'CS Only Headshot',
+    url: '/images/regenerated_image_1791756005244.png'
+  },
+  {
+    name: 'Lone Wolf 1v1',
+    url: '/images/regenerated_image_1791735950149.jpg'
+  },
+  {
     name: 'Battle Royale Esports',
     url: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200&auto=format&fit=crop'
   },
@@ -38,20 +62,8 @@ const PRESET_MATCH_THUMBNAILS = [
     url: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=1200&auto=format&fit=crop'
   },
   {
-    name: 'Lone Wolf 1v1',
-    url: 'https://images.unsplash.com/photo-1579373903781-fd5c0c30c4cd?q=80&w=1200&auto=format&fit=crop'
-  },
-  {
-    name: 'Headshot / Sniper',
-    url: 'https://images.unsplash.com/photo-1563089145-599997674d42?q=80&w=1200&auto=format&fit=crop'
-  },
-  {
     name: 'Survival Arena',
     url: 'https://images.unsplash.com/photo-1538481199705-c710c4e965fc?q=80&w=1200&auto=format&fit=crop'
-  },
-  {
-    name: 'Neon Tournament Stage',
-    url: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=1200&auto=format&fit=crop'
   }
 ];
 
@@ -305,6 +317,9 @@ export default function AdminEditMatch({ onPageChange }: AdminEditMatchProps) {
     setIsProcessing(true);
     try {
       let finalImage = matchForm.image ? matchForm.image.trim() : '';
+      if (!finalImage) {
+        finalImage = '/images/regenerated_image_1791755547255.png';
+      }
       if (finalImage && finalImage.startsWith('data:')) {
         try {
           finalImage = await uploadOriginalImage(finalImage);
@@ -480,6 +495,7 @@ export default function AdminEditMatch({ onPageChange }: AdminEditMatchProps) {
               <div className="relative aspect-video w-full rounded-xl overflow-hidden border border-neutral-700 shadow-md group">
                 <img 
                   src={matchForm.image} 
+                  onError={(e) => { e.currentTarget.src = '/images/regenerated_image_1791755547255.png'; }}
                   alt="Match Thumbnail Preview" 
                   className="w-full h-full object-cover"
                 />
@@ -539,27 +555,16 @@ export default function AdminEditMatch({ onPageChange }: AdminEditMatchProps) {
               </div>
             )}
 
-            {/* Direct Image URL Input */}
-            <div className="space-y-1 pt-1">
-              <label className="text-[9px] font-bold text-neutral-400 uppercase tracking-wider">
-                Or Enter Image URL:
-              </label>
-              <div className="flex gap-2">
-                <input 
-                  type="url"
-                  placeholder="https://images.unsplash.com/..."
-                  value={matchForm.image}
-                  onChange={(e) => setMatchForm(prev => ({ ...prev, image: e.target.value }))}
-                  className="flex-1 h-10 bg-neutral-950 border border-neutral-800 rounded-xl px-3 text-xs font-bold outline-none focus:border-purple-500 transition-all text-white placeholder:text-neutral-600"
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="px-3 h-10 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-colors shrink-0"
-                >
-                  <Upload size={12} /> Browse
-                </button>
-              </div>
+            {/* Select Image from Device Button */}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full h-11 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 shadow-md shadow-purple-500/20 active:scale-[0.99] transition-all cursor-pointer"
+              >
+                <Upload size={14} />
+                <span>{matchForm.image ? 'Change Image From Gallery / Files' : 'Select Image From Gallery / Device'}</span>
+              </button>
             </div>
 
             {/* Quick Preset Thumbnails */}
@@ -583,6 +588,7 @@ export default function AdminEditMatch({ onPageChange }: AdminEditMatchProps) {
                     >
                       <img 
                         src={preset.url} 
+                        onError={(e) => { e.currentTarget.src = '/images/regenerated_image_1791755547255.png'; }}
                         alt={preset.name} 
                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       />

@@ -26,7 +26,7 @@ export const GAMES: Game[] = [
   {
     id: 'freefire',
     title: 'Free Fire',
-    image: 'https://i.ibb.co/v4v8Q5N/freefire.jpg',
+    image: '/images/regenerated_image_1791755547255.png',
     players: 850,
   }
 ];

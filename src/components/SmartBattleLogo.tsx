@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 interface SmartBattleLogoProps {
   size?: 'sm' | 'md' | 'lg' | 'xl';
@@ -7,6 +7,8 @@ interface SmartBattleLogoProps {
 }
 
 export default function SmartBattleLogo({ size = 'md', showText = true, className = '' }: SmartBattleLogoProps) {
+  const [logoSrc, setLogoSrc] = useState<string>('/logo.png');
+
   const iconSizeMap = {
     sm: 'w-8 h-8',
     md: 'w-11 h-11',
@@ -26,8 +28,15 @@ export default function SmartBattleLogo({ size = 'md', showText = true, classNam
       {/* Emblem Icon */}
       <div className={`relative ${iconSizeMap[size]} shrink-0 active:scale-95 transition-transform`}>
         <img 
-          src="/src/assets/images/regenerated_image_1791755565035.png" 
+          src={logoSrc} 
+          onError={() => {
+            if (logoSrc !== '/logo.svg') {
+              setLogoSrc('/logo.svg');
+            }
+          }}
           alt="SMART BATTLE Logo" 
+          loading="eager"
+          decoding="async"
           className="w-full h-full object-contain filter drop-shadow-[0_0_12px_rgba(0,245,255,0.35)]"
         />
       </div>

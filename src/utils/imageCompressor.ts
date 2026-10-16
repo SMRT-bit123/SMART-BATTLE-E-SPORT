@@ -1,7 +1,9 @@
 /**
  * Image Upload Helper - Uploads images at 100% original full resolution and quality without any compression.
- * Saves to server storage or ImgBB and returns a direct URL to store safely in Firestore without hitting size limits.
+ * Saves directly to ImgBB via the configured IMGBB_API_KEY or server storage and returns a direct URL.
  */
+
+export const IMGBB_API_KEY = "d599c4ff6c2a021fa0f952a67b26b480";
 
 export async function uploadOriginalImage(
   fileOrBase64: File | Blob | string,
@@ -31,9 +33,33 @@ export async function uploadOriginalImage(
     });
   }
 
-  if (onProgress) onProgress(25);
+  if (onProgress) onProgress(20);
 
-  // 1. Try uploading to backend /api/upload-image (100% original quality)
+  // 1. Try Client-side direct ImgBB upload (fastest for user, direct CDN link from user's IP)
+  const apiKey = (import.meta.env.VITE_IMGBB_API_KEY as string) || IMGBB_API_KEY;
+  if (apiKey) {
+    try {
+      const rawBase64 = base64String.includes(',') ? base64String.split(',')[1] : base64String;
+      const formData = new FormData();
+      formData.append('image', rawBase64);
+
+      const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
+        method: 'POST',
+        body: formData
+      });
+      const imgbbData = await imgbbRes.json();
+      if (imgbbData?.data?.url) {
+        if (onProgress) onProgress(100);
+        return imgbbData.data.url;
+      }
+    } catch (imgbbErr) {
+      console.warn('[Upload] Client ImgBB direct upload skipped/failed, trying backend:', imgbbErr);
+    }
+  }
+
+  if (onProgress) onProgress(50);
+
+  // 2. Try uploading to backend /api/upload-image (which has server ImgBB + local /uploads/ storage)
   try {
     const res = await fetch('/api/upload-image', {
       method: 'POST',
@@ -46,7 +72,7 @@ export async function uploadOriginalImage(
       })
     });
 
-    if (onProgress) onProgress(75);
+    if (onProgress) onProgress(80);
 
     if (res.ok) {
       const data = await res.json();
@@ -56,29 +82,7 @@ export async function uploadOriginalImage(
       }
     }
   } catch (err) {
-    console.warn('[Upload] Server upload exception, checking ImgBB fallback:', err);
-  }
-
-  // 2. Fallback to client-side ImgBB if key exists (also 100% original quality)
-  const apiKey = import.meta.env.VITE_IMGBB_API_KEY;
-  if (apiKey) {
-    try {
-      const rawBase64 = base64String.includes(',') ? base64String.split(',')[1] : base64String;
-      const formData = new FormData();
-      formData.append('image', rawBase64);
-
-      const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
-        method: 'POST',
-        body: formData
-      });
-      const imgbbData = await imgbbRes.json();
-      if (imgbbData.data?.url) {
-        if (onProgress) onProgress(100);
-        return imgbbData.data.url;
-      }
-    } catch (imgbbErr) {
-      console.warn('[Upload] Client ImgBB upload error:', imgbbErr);
-    }
+    console.warn('[Upload] Server upload exception:', err);
   }
 
   if (onProgress) onProgress(100);

@@ -16,6 +16,7 @@ import {
   X
 } from 'lucide-react';
 import { Page, User } from '../types';
+import { auth } from '../lib/firebase';
 import SupportModal from '../components/SupportModal';
 import RulesModal from '../components/RulesModal';
 import MyOrdersModal from '../components/MyOrdersModal';
@@ -43,11 +44,11 @@ export default function ProfilePage({ user, onPageChange, onLogout }: ProfilePag
     });
   };
 
+  const userEmail = (user?.email || auth.currentUser?.email || '').toLowerCase().trim();
   const isAdminUser =
-    user?.isAdmin ||
-    ['mahendrathakur9009@gmail.com', 'mahendrar9009@gmail.com', 'qupagaming@gmail.com', 'ankushsharma3948@gmail.com'].includes(
-      user?.email || ''
-    );
+    Boolean(user?.isAdmin) ||
+    ['mahendrathakur9009@gmail.com', 'mahendrar9009@gmail.com', 'qupagaming@gmail.com', 'ankushsharma3948@gmail.com'].includes(userEmail) ||
+    auth.currentUser?.uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1';
 
   const totalBalance =
     (user?.wallet?.deposit || 0) + (user?.wallet?.winnings || 0) + (user?.wallet?.bonus || 0);
@@ -69,7 +70,8 @@ export default function ProfilePage({ user, onPageChange, onLogout }: ProfilePag
           >
             <div className="w-11 h-11 rounded-2xl bg-gradient-to-b from-[#1b2b48] to-[#0a1220] p-1 border border-cyan-500/40 shadow-lg flex items-center justify-center overflow-hidden">
               <img 
-                src="/src/assets/images/regenerated_image_1791755565035.png" 
+                src="/logo.png" 
+                onError={(e) => { e.currentTarget.src = '/logo.svg'; }}
                 alt="SMART BATTLE Logo" 
                 className="w-full h-full object-contain"
               />
@@ -112,7 +114,8 @@ export default function ProfilePage({ user, onPageChange, onLogout }: ProfilePag
             className="w-28 h-28 sm:w-32 sm:h-32 rounded-3xl p-2 bg-gradient-to-b from-[#1b2b4a] via-[#101a2f] to-[#060c18] border-2 border-cyan-400 shadow-xl shadow-cyan-500/20 flex items-center justify-center overflow-hidden relative group"
           >
             <img 
-              src="/src/assets/images/regenerated_image_1791755565035.png" 
+              src="/logo.png" 
+              onError={(e) => { e.currentTarget.src = '/logo.svg'; }}
               alt="SMART BATTLE Logo" 
               className="w-full h-full object-contain filter drop-shadow-[0_0_8px_rgba(0,245,255,0.4)]"
             />

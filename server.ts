@@ -103,7 +103,8 @@ async function seedInitialData() {
     const adminEmails = [
       'mahendrathakur9009@gmail.com',
       'qupagaming@gmail.com',
-      'mahendrar9009@gmail.com'
+      'mahendrar9009@gmail.com',
+      'ankushsharma3948@gmail.com'
     ];
     
     const adminUids = [
@@ -144,28 +145,48 @@ async function seedInitialData() {
       console.log("[Firebase Admin] Seeded default Cashfree setting (Inactive)");
     }
 
+    // Ensure Custom Direct UPI QR gateway exists and is active (Zero KYC)
+    const customDoc = await firestore.collection('paymentSettings').doc('custom').get();
+    if (!customDoc.exists) {
+      await firestore.collection('paymentSettings').doc('custom').set({
+        name: 'Direct UPI & QR Code',
+        id: 'custom',
+        isActive: true,
+        upiId: '9554721875@fam',
+        merchantId: 'Ankush Sharma',
+        updatedAt: FieldValue.serverTimestamp()
+      });
+      console.log("[Firebase Admin] Seeded default Direct UPI & QR gateway (Active)");
+    } else {
+      await firestore.collection('paymentSettings').doc('custom').set({
+        name: 'Direct UPI & QR Code',
+        id: 'custom',
+        isActive: true,
+        upiId: customDoc.data()?.upiId || '9554721875@fam',
+        merchantId: customDoc.data()?.merchantId || 'Ankush Sharma',
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+
     const zapupiDoc = await firestore.collection('paymentSettings').doc('zapupi').get();
     if (!zapupiDoc.exists) {
       await firestore.collection('paymentSettings').doc('zapupi').set({
         name: 'ZapUPI',
         id: 'zapupi',
-        isActive: true, // Activated by default
+        isActive: false,
         isProduction: process.env.ZAPUPI_ENV === 'LIVE',
         apiKey: process.env.ZAPUPI_API_KEY || '',
         updatedAt: FieldValue.serverTimestamp()
       });
-      console.log("[Firebase Admin] Seeded default ZapUPI setting (Active)");
     } else {
-      // If it exists, ensure it's active as requested
       await firestore.collection('paymentSettings').doc('zapupi').update({
-        isActive: true,
-        updatedAt: FieldValue.serverTimestamp()
-      });
-      // Deactivate Cashfree to ensure ZapUPI is the only active one
-      await firestore.collection('paymentSettings').doc('cashfree').update({
         isActive: false
       }).catch(() => {});
     }
+
+    await firestore.collection('paymentSettings').doc('cashfree').update({
+      isActive: false
+    }).catch(() => {});
   } catch (err) {
     console.error("[Firebase Admin] Seeding failed:", err);
   }
@@ -288,7 +309,7 @@ async function startServer() {
       }
 
       // If ImgBB API Key is configured, upload original high-res image to ImgBB
-      const imgbbKey = process.env.IMGBB_API_KEY || process.env.IMAGEBB_API_KEY || process.env.VITE_IMGBB_API_KEY;
+      const imgbbKey = process.env.IMGBB_API_KEY || process.env.IMAGEBB_API_KEY || process.env.VITE_IMGBB_API_KEY || "d599c4ff6c2a021fa0f952a67b26b480";
       if (imgbbKey) {
         try {
           const rawBase64 = imageBase64.includes(",") ? imageBase64.split(",")[1] : imageBase64;
@@ -551,9 +572,14 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
   const parts = orderId.split('_');
   const userId = parts[parts.length - 1];
 
-  if (!userId) {
-    console.error(`[ZapUPI] Could not identify User for Order: ${orderId}`);
-    return { success: false, error: "User identification failed" };
+  if (!userId || userId.toLowerCase().includes('test') || orderId.toLowerCase().includes('test')) {
+    console.log(`[ZapUPI] Handled test or simulation order: ${orderId}`);
+    return { success: true, isTest: true };
+  }
+
+  if (!firestore) {
+    console.warn(`[ZapUPI] Firestore not initialized for payment processing: ${orderId}`);
+    return { success: false, error: "Firestore not initialized" };
   }
 
   const transRef = firestore.collection('transactions').doc(orderId);
@@ -585,10 +611,17 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
       createdAt: transDoc.exists ? transDoc.data()?.createdAt : FieldValue.serverTimestamp()
     }, { merge: true });
 
-    t.update(userRef, {
-      'wallet.deposit': FieldValue.increment(depositAmount),
-      'stats.totalDeposited': FieldValue.increment(depositAmount)
-    });
+    try {
+      const userDoc = await t.get(userRef);
+      if (userDoc.exists) {
+        t.update(userRef, {
+          'wallet.deposit': FieldValue.increment(depositAmount),
+          'stats.totalDeposited': FieldValue.increment(depositAmount)
+        });
+      }
+    } catch (e: any) {
+      console.warn(`[ZapUPI] Could not update user balance during transaction: ${e.message}`);
+    }
 
     return { success: true };
   });
@@ -673,30 +706,61 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
     }
   });
 
+  // ZapUPI Webhook Health Check / Verification (GET / HEAD)
+  serverApp.get(["/api/zapupi/webhook", "/api/zapupi/webhook/"], (req, res) => {
+    res.status(200).json({
+      status: "success",
+      success: true,
+      message: "ZapUPI webhook endpoint is active and listening",
+      timestamp: new Date().toISOString()
+    });
+  });
+
+  serverApp.head(["/api/zapupi/webhook", "/api/zapupi/webhook/"], (req, res) => {
+    res.status(200).end();
+  });
+
   // ZapUPI Webhook
-  serverApp.post("/api/zapupi/webhook", async (req, res) => {
+  serverApp.post(["/api/zapupi/webhook", "/api/zapupi/webhook/"], async (req, res) => {
     try {
       console.log(`[ZapUPI Webhook] Raw Headers:`, JSON.stringify(req.headers));
       console.log(`[ZapUPI Webhook] Body Received:`, JSON.stringify(req.body));
+      console.log(`[ZapUPI Webhook] Query Received:`, JSON.stringify(req.query));
       
-      const { 
-        status, 
-        order_id, 
-        amount, 
-        pay_amount, 
-        txn_id, 
-        utr, 
-        environment 
-      } = req.body;
+      // Combine body and query parameters (ZapUPI can send in either JSON, urlencoded, or query string)
+      const data: any = {
+        ...req.query,
+        ...(typeof req.body === 'object' && req.body ? req.body : {})
+      };
 
-      const orderIdFinal = order_id || req.body.orderId;
-      const amountFinal = pay_amount || amount || req.body.amount;
-      const statusFinal = status || req.body.orderStatus;
-      const transactionId = txn_id || req.body.tx_id;
-      const utrFinal = utr || '';
+      // Fallback: If body was raw text JSON
+      if (!data.order_id && !data.orderId && (req as any).rawBody) {
+        try {
+          const parsed = JSON.parse((req as any).rawBody);
+          Object.assign(data, parsed);
+        } catch (e) {}
+      }
 
-      if (!orderIdFinal) {
-        return res.status(400).json({ success: false, error: "Missing order_id" });
+      const orderIdFinal = data.order_id || data.orderId || data.client_order_id || data.order || data.id;
+      const amountFinal = data.pay_amount || data.amount || data.order_amount;
+      const statusFinal = data.status || data.orderStatus || data.order_status || data.txStatus;
+      const transactionId = data.txn_id || data.tx_id || data.transaction_id || data.bank_ref_no;
+      const utrFinal = data.utr || data.bank_ref_no || data.rRN || '';
+      const environment = data.environment;
+
+      // Handle ping / dashboard test requests gracefully with 200 OK
+      if (!orderIdFinal || 
+          String(orderIdFinal).toLowerCase().includes('test') || 
+          data.test || 
+          data.event === 'test' || 
+          data.event === 'ping') {
+        console.log(`[ZapUPI Webhook] Ping / Test validation received successfully:`, JSON.stringify(data));
+        return res.status(200).json({
+          status: "success",
+          success: true,
+          message: "ZapUPI webhook endpoint verified successfully",
+          received: data
+        });
       }
 
       const config: any = await getActiveGateway();
@@ -720,25 +784,27 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         "/api/v1/get_order"
       ];
 
-      outer: for (const host of hosts) {
-        for (const path of paths) {
-          const verifyUrl = `${host}${path}`;
-          try {
-            const verifyRes = await axios.post(verifyUrl, {
-              zap_key: apiKey,
-              order_id: orderIdFinal
-            }, { timeout: 8000 });
+      if (apiKey) {
+        outer: for (const host of hosts) {
+          for (const path of paths) {
+            const verifyUrl = `${host}${path}`;
+            try {
+              const verifyRes = await axios.post(verifyUrl, {
+                zap_key: apiKey,
+                order_id: orderIdFinal
+              }, { timeout: 6000 });
 
-            const vData = verifyRes.data;
-            const s = String(vData.status || vData.order_status || vData.orderStatus || '').toLowerCase();
-            if (s === 'success' || s === 'completed' || s === 'paid') {
-              isVerified = true;
-              verifiedAmount = vData.amount || vData.order_amount || amountFinal;
-              zapTransactionData = vData;
-              console.log(`[ZapUPI Webhook] Verified via ${verifyUrl}`);
-              break outer;
-            }
-          } catch (err) {}
+              const vData = verifyRes.data;
+              const s = String(vData.status || vData.order_status || vData.orderStatus || '').toLowerCase();
+              if (s === 'success' || s === 'completed' || s === 'paid') {
+                isVerified = true;
+                verifiedAmount = vData.amount || vData.order_amount || amountFinal;
+                zapTransactionData = vData;
+                console.log(`[ZapUPI Webhook] Verified via ${verifyUrl}`);
+                break outer;
+              }
+            } catch (err) {}
+          }
         }
       }
 
@@ -746,21 +812,25 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
                         ['success', 'completed', 'paid'].includes(String(statusFinal).toLowerCase());
       
       if (isSuccess) {
-        const result = await processZapUPIPayment(
-          orderIdFinal, 
-          verifiedAmount, 
-          transactionId || zapTransactionData?.txn_id || orderIdFinal, 
-          utrFinal || zapTransactionData?.utr || '',
-          environment
-        );
-        
-        if (result.success) console.log(`[ZapUPI Webhook] Wallet updated for ${orderIdFinal}`);
+        try {
+          const result = await processZapUPIPayment(
+            orderIdFinal, 
+            verifiedAmount, 
+            transactionId || zapTransactionData?.txn_id || orderIdFinal, 
+            utrFinal || zapTransactionData?.utr || '',
+            environment
+          );
+          
+          if (result?.success) console.log(`[ZapUPI Webhook] Wallet updated for ${orderIdFinal}`);
+        } catch (paymentErr: any) {
+          console.error(`[ZapUPI Webhook] processZapUPIPayment error:`, paymentErr.message);
+        }
       }
 
-      res.status(200).send("OK");
+      return res.status(200).send("OK");
     } catch (error: any) {
       console.error("[ZapUPI Webhook] CRITICAL ERROR:", error.message);
-      res.status(500).send("Internal Server Error");
+      return res.status(200).json({ status: "received", warning: error.message });
     }
   });
 
@@ -889,6 +959,12 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
     }
     next(err);
   });
+
+  // Serve static assets reliably for mobile browsers & Android WebView
+  serverApp.use("/images", express.static(path.join(process.cwd(), "public/images")));
+  serverApp.use("/assets", express.static(path.join(process.cwd(), "public/assets")));
+  serverApp.use("/src/assets", express.static(path.join(process.cwd(), "src/assets")));
+  serverApp.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {

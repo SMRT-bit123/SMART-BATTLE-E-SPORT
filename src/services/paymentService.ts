@@ -2,6 +2,14 @@ import { db } from '../lib/firebase';
 import { collection, query, where, getDocs, onSnapshot, doc } from 'firebase/firestore';
 import { PaymentGateway } from '../types';
 
+export const DEFAULT_DIRECT_UPI_GATEWAY: PaymentGateway = {
+  id: 'custom',
+  name: 'Direct UPI & QR Code',
+  upiId: '9554721875@fam',
+  merchantId: 'Ankush Sharma',
+  isActive: true
+};
+
 class PaymentService {
   private activeGateway: PaymentGateway | null = null;
   private unsubscriber: (() => void) | null = null;
@@ -19,31 +27,36 @@ class PaymentService {
         this.activeGateway = { ...data, id: snapshot.docs[0].id };
         console.log(`[PaymentService] Active Gateway: ${this.activeGateway.name}`);
       } else {
-        this.activeGateway = null;
-        console.warn('[PaymentService] No active payment gateway found');
+        this.activeGateway = DEFAULT_DIRECT_UPI_GATEWAY;
+        console.warn('[PaymentService] No active payment gateway found in DB, using Direct UPI default');
       }
     }, (error) => {
       console.warn('[PaymentService] Snapshot error:', error);
     });
   }
 
-  public getActiveGateway(): PaymentGateway | null {
-    return this.activeGateway;
+  public getActiveGateway(): PaymentGateway {
+    return this.activeGateway || DEFAULT_DIRECT_UPI_GATEWAY;
   }
 
-  public async getActiveGatewayAsync(): Promise<PaymentGateway | null> {
+  public async getActiveGatewayAsync(): Promise<PaymentGateway> {
     if (this.activeGateway) return this.activeGateway;
     
-    const q = query(collection(db, 'paymentSettings'), where('isActive', '==', true));
-    const snap = await getDocs(q);
-    
-    if (!snap.empty) {
-      const data = snap.docs[0].data() as PaymentGateway;
-      this.activeGateway = { ...data, id: snap.docs[0].id };
-      return this.activeGateway;
+    try {
+      const q = query(collection(db, 'paymentSettings'), where('isActive', '==', true));
+      const snap = await getDocs(q);
+      
+      if (!snap.empty) {
+        const data = snap.docs[0].data() as PaymentGateway;
+        this.activeGateway = { ...data, id: snap.docs[0].id };
+        return this.activeGateway;
+      }
+    } catch (e) {
+      console.warn('[PaymentService] Error fetching gateway:', e);
     }
     
-    return null;
+    this.activeGateway = DEFAULT_DIRECT_UPI_GATEWAY;
+    return this.activeGateway;
   }
 
   // Unified payment initiation method
@@ -154,8 +167,11 @@ class PaymentService {
   }
 
   private async initCustomGateway(amount: number, userId: string, config: PaymentGateway) {
-    console.log('Initiating Custom Gateway payment...', { amount, userId });
-    return { type: 'custom', amount, config };
+    const upiId = config.upiId || '9554721875@fam';
+    const payeeName = config.merchantId || 'Ankush Sharma';
+    const upiUri = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(payeeName)}&am=${amount}&cu=INR&tn=${encodeURIComponent('Add Coins')}`;
+    console.log('Initiating Direct UPI payment...', { amount, userId, upiId, payeeName });
+    return { type: 'custom', amount, config, upiId, payeeName, upiUri };
   }
 
   public dispose() {

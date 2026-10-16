@@ -316,7 +316,27 @@ export default function App() {
               return;
             }
 
-            setUser({ id: userDoc.id, ...data } as User);
+            const currentEmail = (firebaseUser.email || data.email || '').toLowerCase().trim();
+            const adminEmails = [
+              'qupagaming@gmail.com',
+              'mahendrathakur9009@gmail.com',
+              'mahendrar9009@gmail.com',
+              'ankushsharma3948@gmail.com'
+            ];
+            const isUserAdmin = Boolean(
+              data.isAdmin ||
+              adminEmails.includes(currentEmail) ||
+              firebaseUser.uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1'
+            );
+
+            // Persist isAdmin: true to Firestore user document if missing
+            if (isUserAdmin && !data.isAdmin) {
+              updateDoc(userDocRef, { isAdmin: true }).catch((err) => {
+                console.warn('Could not auto-update isAdmin flag in user doc:', err);
+              });
+            }
+
+            setUser({ id: userDoc.id, ...data, isAdmin: isUserAdmin } as User);
             setIsLoggedIn(true);
             setLoading(false);
 
