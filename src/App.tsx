@@ -226,7 +226,7 @@ export default function App() {
               title: 'FREE MATCH',
               subtitle: 'Free Entry',
               category: 'Free Match',
-              image: '/src/assets/images/regenerated_image_1791756013539.png',
+              image: '/images/regenerated_image_1791756013539.png',
               order: 3
             }, { merge: true });
             console.log('Seeded freefire_free_match');
@@ -239,14 +239,14 @@ export default function App() {
         try {
           const csHeadshotRef = doc(db, 'gameModes', 'freefire_cs_headshot');
           const csHeadshotDoc = await getDoc(csHeadshotRef);
-          if (!csHeadshotDoc.exists() || csHeadshotDoc.data()?.image?.includes('1791755557083')) {
+          if (!csHeadshotDoc.exists() || csHeadshotDoc.data()?.image?.includes('1791755557083') || csHeadshotDoc.data()?.image?.startsWith('/src/assets/images/')) {
             await setDoc(csHeadshotRef, {
               id: 'cs_headshot',
               gameId: 'freefire',
               title: 'CS HEADSHOT',
               subtitle: 'Only Headshot',
               category: 'CS Headshot',
-              image: '/src/assets/images/regenerated_image_1791756005244.png',
+              image: '/images/regenerated_image_1791756005244.png',
               order: 4
             }, { merge: true });
             console.log('Seeded freefire_cs_headshot');
@@ -270,6 +270,23 @@ export default function App() {
           });
           await batch.commit();
           console.log('Game modes seeded from constants');
+        } else {
+          // Auto-repair any mode in Firestore that has dead ibb.co or legacy paths
+          for (const mDoc of modesSnap.docs) {
+            const data = mDoc.data();
+            if (data.image && (data.image.includes('i.ibb.co') || data.image.startsWith('/src/assets/images/'))) {
+              const cleanId = (data.id || '').replace(/^freefire_/, '');
+              const targetImg = (GAME_MODES_DATA['freefire']?.find(m => m.id === cleanId)?.image) || '/images/regenerated_image_1791755547255.png';
+              try {
+                await setDoc(doc(db, 'gameModes', mDoc.id), {
+                  image: targetImg
+                }, { merge: true });
+                console.log(`Repaired image for mode ${mDoc.id} -> ${targetImg}`);
+              } catch (e) {
+                // Ignore if client is non-admin
+              }
+            }
+          }
         }
       } catch (error) {
         console.error('Error seeding database:', error);

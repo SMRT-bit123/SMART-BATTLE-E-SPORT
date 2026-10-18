@@ -55,15 +55,15 @@ const PRESET_COVERS = [
 ];
 
 const DEFAULT_PRESET_MODES: GameMode[] = [
-  { id: 'br_solo', gameId: 'freefire', title: 'BR SOLO', subtitle: 'Battle Royale', category: 'Battle Royale', image: '/src/assets/images/regenerated_image_1791735926796.jpg', order: 1 },
-  { id: 'br_duo', gameId: 'freefire', title: 'BR DUO', subtitle: 'Battle Royale', category: 'Battle Royale', image: '/src/assets/images/regenerated_image_1791755547255.png', order: 2 },
-  { id: 'br_squad', gameId: 'freefire', title: 'BR SQUAD', subtitle: 'Battle Royale', category: 'Battle Royale', image: '/src/assets/images/regenerated_image_1791755551692.png', order: 3 },
-  { id: 'free_match', gameId: 'freefire', title: 'FREE MATCH', subtitle: 'Free Entry', category: 'Free Match', image: '/src/assets/images/regenerated_image_1791756013539.png', order: 4 },
-  { id: 'cs_headshot', gameId: 'freefire', title: 'CS HEADSHOT', subtitle: 'Only Headshot', category: 'CS Headshot', image: '/src/assets/images/regenerated_image_1791756005244.png', order: 5 },
-  { id: 'cs_solo', gameId: 'freefire', title: 'CS SOLO', subtitle: 'Clash Squad', category: 'Clash Squad', image: '/src/assets/images/regenerated_image_1791755559649.png', order: 6 },
-  { id: 'cs_duo', gameId: 'freefire', title: 'CS DUO', subtitle: 'Clash Squad', category: 'Clash Squad', image: '/src/assets/images/regenerated_image_1791755563719.png', order: 7 },
-  { id: 'lone_wolf_solo', gameId: 'freefire', title: 'LONE WOLF SOLO', subtitle: 'Lone Wolf', category: 'Lone Wolf', image: '/src/assets/images/regenerated_image_1791735947152.jpg', order: 8 },
-  { id: 'lone_wolf_duo', gameId: 'freefire', title: 'LONE WOLF DUO', subtitle: 'Lone Wolf', category: 'Lone Wolf', image: '/src/assets/images/regenerated_image_1791735950149.jpg', order: 9 },
+  { id: 'br_solo', gameId: 'freefire', title: 'BR SOLO', subtitle: 'Battle Royale', category: 'Battle Royale', image: '/images/regenerated_image_1791735926796.jpg', order: 1 },
+  { id: 'br_duo', gameId: 'freefire', title: 'BR DUO', subtitle: 'Battle Royale', category: 'Battle Royale', image: '/images/regenerated_image_1791755547255.png', order: 2 },
+  { id: 'br_squad', gameId: 'freefire', title: 'BR SQUAD', subtitle: 'Battle Royale', category: 'Battle Royale', image: '/images/regenerated_image_1791755551692.png', order: 3 },
+  { id: 'free_match', gameId: 'freefire', title: 'FREE MATCH', subtitle: 'Free Entry', category: 'Free Match', image: '/images/regenerated_image_1791756013539.png', order: 4 },
+  { id: 'cs_headshot', gameId: 'freefire', title: 'CS HEADSHOT', subtitle: 'Only Headshot', category: 'CS Headshot', image: '/images/regenerated_image_1791756005244.png', order: 5 },
+  { id: 'cs_solo', gameId: 'freefire', title: 'CS SOLO', subtitle: 'Clash Squad', category: 'Clash Squad', image: '/images/regenerated_image_1791755559649.png', order: 6 },
+  { id: 'cs_duo', gameId: 'freefire', title: 'CS DUO', subtitle: 'Clash Squad', category: 'Clash Squad', image: '/images/regenerated_image_1791755563719.png', order: 7 },
+  { id: 'lone_wolf_solo', gameId: 'freefire', title: 'LONE WOLF SOLO', subtitle: 'Lone Wolf', category: 'Lone Wolf', image: '/images/regenerated_image_1791735947152.jpg', order: 8 },
+  { id: 'lone_wolf_duo', gameId: 'freefire', title: 'LONE WOLF DUO', subtitle: 'Lone Wolf', category: 'Lone Wolf', image: '/images/regenerated_image_1791735950149.jpg', order: 9 },
   { id: 'custom_room', gameId: 'freefire', title: 'CUSTOM ROOM', subtitle: 'Special Tournament', category: 'Custom Room', image: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=1200&auto=format&fit=crop', order: 10 },
 ];
 

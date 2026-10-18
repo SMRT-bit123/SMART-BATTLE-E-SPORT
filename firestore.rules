@@ -83,8 +83,22 @@ service cloud.firestore {
       allow delete: if isAdmin();
       allow update: if isSignedIn() && (
         isAdmin() || 
-        (request.resource.data.diff(resource.data).affectedKeys().hasAny(['players', 'playersCount']))
+        (request.resource.data.diff(resource.data).affectedKeys().hasAny(['players', 'playersCount'])) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasAny(['roomId', 'roomPassword', 'roomReleaseTime', 'status', 'updatedAt']))
       );
+    }
+
+    // Hosts: Host account permissions and assignments
+    match /hosts/{hostId} {
+      allow read, get, list: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Host Logs: Audit trail for host actions (Immutable)
+    match /hostLogs/{logId} {
+      allow read, list, get: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
     }
 
     // Registrations: Player entries into matches

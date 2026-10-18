@@ -18,7 +18,8 @@ export enum Page {
   GAME_MODES = 'game_modes',
   ADMIN_MODES = 'admin_modes',
   LEADERBOARD = 'leaderboard',
-  MATCH_DETAILS = 'match_details'
+  MATCH_DETAILS = 'match_details',
+  HOST_DASHBOARD = 'host_dashboard'
 }
 
 export interface Game {
@@ -35,6 +36,8 @@ export interface Tournament {
   gameId: string;
   title: string;
   image?: string;
+  bannerImage?: string; // Optional individual match banner
+  category?: string; // Standardized mode/category e.g. 'br_solo', 'br_duo', 'br_squad'
   entryFee: number;
   prize: string;
   maxPlayers: number;
@@ -48,6 +51,10 @@ export interface Tournament {
   time: string;
   roomId?: string;
   roomPassword?: string;
+  roomReleaseTime?: string;
+  assignedHostId?: string;
+  assignedHostEmail?: string;
+  assignedHostName?: string;
   prizeType?: 'perKill' | 'survival';
   perKillAmount?: number;
   winnersCount?: number;
@@ -55,7 +62,7 @@ export interface Tournament {
   prizeDistribution?: Record<number, number>;
   positionWinnersCount?: number;
   positionPrizeDistribution?: Record<number, number>;
-  status?: 'upcoming' | 'ongoing' | 'completed' | 'active'; // Included active for backward compatibility
+  status?: 'upcoming' | 'ongoing' | 'completed' | 'active' | 'room_ready'; // Included active for backward compatibility
   description?: string;
   rules?: string[] | string;
   createdAt?: any;
@@ -103,6 +110,9 @@ export interface User {
   isKycVerified: boolean;
   isBanned?: boolean;
   isAdmin?: boolean;
+  isHost?: boolean;
+  hostId?: string;
+  hostCategories?: string[];
   stats: UserStats;
   gameIGNs?: Record<string, string>;
   ign?: string;
@@ -116,12 +126,40 @@ export interface User {
 
 export interface Banner {
   id?: string;
+  title?: string;
+  subtitle?: string;
   imageUrl: string;
   redirectUrl?: string;
   type: 'main' | 'offer' | 'freefire';
   order: number;
   isActive: boolean;
   createdAt?: any;
+  updatedAt?: any;
+}
+
+export interface HostAccount {
+  id: string; // Document ID or User UID
+  userId?: string;
+  email: string;
+  name: string;
+  phone?: string;
+  status: 'active' | 'inactive';
+  permittedCategories: string[]; // e.g. ['br_solo', 'br_duo', 'br_squad']
+  assignedMatchIds?: string[];
+  createdAt: any;
+  updatedAt?: any;
+}
+
+export interface HostLog {
+  id?: string;
+  hostId: string;
+  hostEmail: string;
+  hostName: string;
+  matchId: string;
+  matchTitle: string;
+  action: 'updated_room_credentials' | 'updated_status' | 'viewed_participants';
+  details?: any;
+  timestamp: any;
 }
 
 export interface PaymentGateway {

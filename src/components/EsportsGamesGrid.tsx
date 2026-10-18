@@ -22,35 +22,43 @@ interface EsportsGamesGridProps {
 }
 
 const MODE_IMAGE_MAP: Record<string, string> = {
-  'br_solo': '/src/assets/images/regenerated_image_1791735926796.jpg',
-  'br_duo': '/src/assets/images/regenerated_image_1791755547255.png',
-  'br_squad': '/src/assets/images/regenerated_image_1791755551692.png',
-  'free_match': '/src/assets/images/regenerated_image_1791756013539.png',
-  'cs_headshot': '/src/assets/images/regenerated_image_1791756005244.png',
-  'cs_solo': '/src/assets/images/regenerated_image_1791755559649.png',
-  'cs_duo': '/src/assets/images/regenerated_image_1791755563719.png',
-  'lone_wolf_solo': '/src/assets/images/regenerated_image_1791735947152.jpg',
-  'lone_wolf_duo': '/src/assets/images/regenerated_image_1791735950149.jpg',
+  'br_solo': '/images/regenerated_image_1791735926796.jpg',
+  'br_duo': '/images/regenerated_image_1791755547255.png',
+  'br_squad': '/images/regenerated_image_1791755551692.png',
+  'free_match': '/images/regenerated_image_1791756013539.png',
+  'cs_headshot': '/images/regenerated_image_1791756005244.png',
+  'cs_solo': '/images/regenerated_image_1791755559649.png',
+  'cs_duo': '/images/regenerated_image_1791755563719.png',
+  'lone_wolf_solo': '/images/regenerated_image_1791735947152.jpg',
+  'lone_wolf_duo': '/images/regenerated_image_1791735950149.jpg',
 };
 
 const ORDERED_FALLBACK_IMAGES = [
-  '/src/assets/images/regenerated_image_1791735926796.jpg',
-  '/src/assets/images/regenerated_image_1791755547255.png',
-  '/src/assets/images/regenerated_image_1791755551692.png',
-  '/src/assets/images/regenerated_image_1791756013539.png',
-  '/src/assets/images/regenerated_image_1791756005244.png',
-  '/src/assets/images/regenerated_image_1791755559649.png',
-  '/src/assets/images/regenerated_image_1791755563719.png',
-  '/src/assets/images/regenerated_image_1791735950149.jpg',
+  '/images/regenerated_image_1791735926796.jpg',
+  '/images/regenerated_image_1791755547255.png',
+  '/images/regenerated_image_1791755551692.png',
+  '/images/regenerated_image_1791756013539.png',
+  '/images/regenerated_image_1791756005244.png',
+  '/images/regenerated_image_1791755559649.png',
+  '/images/regenerated_image_1791755563719.png',
+  '/images/regenerated_image_1791735950149.jpg',
 ];
 
 const getModeImage = (mode: GameMode, index: number) => {
   const cleanId = (mode.id || '').replace(/^freefire_/, '');
-  if (cleanId === 'free_match') return '/src/assets/images/regenerated_image_1791756013539.png';
-  if (cleanId === 'cs_headshot') return '/src/assets/images/regenerated_image_1791756005244.png';
-  if (mode.image && !mode.image.includes('1791755555487') && !mode.image.includes('1791755557083') && mode.image.startsWith('/src/assets/images/')) {
-    return mode.image;
+  if (cleanId === 'free_match') return '/images/regenerated_image_1791756013539.png';
+  if (cleanId === 'cs_headshot') return '/images/regenerated_image_1791756005244.png';
+  
+  // If mode image in DB is dead ibb.co or invalid, directly use the high-quality local artwork
+  if (!mode.image || mode.image.includes('i.ibb.co') || mode.image.includes('1791755555487') || mode.image.includes('1791755557083')) {
+    if (MODE_IMAGE_MAP[cleanId]) return MODE_IMAGE_MAP[cleanId];
+    if (MODE_IMAGE_MAP[mode.id]) return MODE_IMAGE_MAP[mode.id];
   }
+
+  if (mode.image && !mode.image.includes('i.ibb.co')) {
+    return mode.image.replace('/src/assets/images/', '/images/');
+  }
+
   if (MODE_IMAGE_MAP[cleanId]) return MODE_IMAGE_MAP[cleanId];
   if (MODE_IMAGE_MAP[mode.id]) return MODE_IMAGE_MAP[mode.id];
   return ORDERED_FALLBACK_IMAGES[index % ORDERED_FALLBACK_IMAGES.length];
@@ -91,7 +99,7 @@ export default function EsportsGamesGrid({ matches, onPageChange }: EsportsGames
             title: 'FREE MATCH',
             subtitle: 'Free Entry',
             category: 'Free Match',
-            image: '/src/assets/images/regenerated_image_1791756013539.png',
+            image: '/images/regenerated_image_1791756013539.png',
             order: 3,
           });
         }
@@ -110,7 +118,7 @@ export default function EsportsGamesGrid({ matches, onPageChange }: EsportsGames
             title: 'CS HEADSHOT',
             subtitle: 'Only Headshot',
             category: 'CS Headshot',
-            image: '/src/assets/images/regenerated_image_1791756005244.png',
+            image: '/images/regenerated_image_1791756005244.png',
             order: 4,
           });
         }
