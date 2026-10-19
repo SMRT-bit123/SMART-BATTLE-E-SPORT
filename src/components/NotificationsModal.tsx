@@ -8,7 +8,6 @@ import {
 import { Page, AppNotification, User } from '../types';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, limit, doc, updateDoc, arrayUnion } from 'firebase/firestore';
-import { useModalBackHandler } from '../hooks/useModalBackHandler';
 import SafeImage from './SafeImage';
 import { requestMobileNotificationPermission, triggerMobileStatusBarNotification } from '../utils/mobileNotificationHelper';
 
@@ -34,8 +33,6 @@ export default function NotificationsModal({
   );
   const [isRequestingPermission, setIsRequestingPermission] = useState(false);
   const [testSent, setTestSent] = useState(false);
-
-  useModalBackHandler(isOpen, onClose);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {

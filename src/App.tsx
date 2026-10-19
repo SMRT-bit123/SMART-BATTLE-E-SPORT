@@ -105,7 +105,18 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      const cached = localStorage.getItem('smart_battle_cached_user');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.id) return parsed;
+      }
+    } catch {
+      // Ignore
+    }
+    return null;
+  });
   const [loading, setLoading] = useState(true);
   const [joinedMatchIds, setJoinedMatchIds] = useState<string[]>([]);
 
@@ -353,9 +364,15 @@ export default function App() {
               });
             }
 
-            setUser({ id: userDoc.id, ...data, isAdmin: isUserAdmin } as User);
+            const updatedUser = { id: userDoc.id, ...data, isAdmin: isUserAdmin } as User;
+            setUser(updatedUser);
             setIsLoggedIn(true);
             setLoading(false);
+            try {
+              localStorage.setItem('smart_battle_cached_user', JSON.stringify(updatedUser));
+            } catch {
+              // Ignore storage exceptions
+            }
 
             // Process referral rewards if eligible
             if (data.referredBy && !data.referralClaimed) {
@@ -363,9 +380,10 @@ export default function App() {
             }
             
             // Immediate redirect to home if on login/signup pages
-            if (location.pathname === '/login' || location.pathname === '/signup' || location.pathname === '/') {
+            const currentPath = window.location.pathname;
+            if (currentPath === '/login' || currentPath === '/signup' || currentPath === '/') {
               console.log("Redirecting to home...");
-              navigate('/home');
+              navigate('/home', { replace: true });
             }
           } else {
             // For Google Auth or unexpected cases, create default profile
@@ -389,6 +407,17 @@ export default function App() {
           }
         }, (error) => {
           handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+          // If cached user exists for this session, keep user authenticated
+          try {
+            const cached = localStorage.getItem('smart_battle_cached_user');
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              if (parsed && parsed.id === firebaseUser.uid) {
+                setUser(parsed);
+                setIsLoggedIn(true);
+              }
+            }
+          } catch {}
           setLoading(false);
         });
 
@@ -405,8 +434,12 @@ export default function App() {
         setIsLoggedIn(false);
         setUser(null);
         setJoinedMatchIds([]);
-        if (!['/login', '/signup'].includes(location.pathname)) {
-          navigate('/login');
+        try {
+          localStorage.removeItem('smart_battle_cached_user');
+        } catch {}
+        const currentPath = window.location.pathname;
+        if (!['/login', '/signup'].includes(currentPath)) {
+          navigate('/login', { replace: true });
         }
         setLoading(false);
       }
@@ -420,12 +453,20 @@ export default function App() {
 
   const handleLogin = () => {
     console.log("Redirecting to home...");
-    navigate('/home');
+    navigate('/home', { replace: true });
   };
 
   const handleLogout = async () => {
-    await auth.signOut();
-    navigate('/login');
+    try {
+      localStorage.removeItem('smart_battle_cached_user');
+      await auth.signOut();
+    } catch (e) {
+      console.error('Logout error:', e);
+    } finally {
+      setIsLoggedIn(false);
+      setUser(null);
+      navigate('/login', { replace: true });
+    }
   };
 
   const handlePageChange = (page: Page, id?: string) => {
@@ -538,9 +579,27 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background flex flex-col items-center justify-center">
-        <div className="w-12 h-12 border-4 border-purple-600 border-t-transparent rounded-full animate-spin" />
-        <p className="mt-4 text-xs font-black uppercase tracking-widest text-neutral-500">Initializing...</p>
+      <div className="min-h-screen bg-[#07152b] flex flex-col items-center justify-center p-6 text-white select-none">
+        <div className="relative mb-5">
+          <div className="w-20 h-20 rounded-3xl bg-gradient-to-b from-[#162238] to-[#0a1220] p-2 border border-cyan-500/30 shadow-xl shadow-cyan-500/10 flex items-center justify-center overflow-hidden animate-pulse">
+            <img 
+              src="/logo.png" 
+              onError={(e) => { e.currentTarget.src = '/logo.svg'; }}
+              alt="SMART BATTLE Logo" 
+              className="w-full h-full object-contain"
+            />
+          </div>
+          <div className="absolute -inset-1 rounded-3xl bg-cyan-500/20 blur-md -z-10 animate-pulse" />
+        </div>
+        <h2 className="text-base sm:text-lg font-black tracking-wider uppercase bg-gradient-to-r from-white via-cyan-200 to-blue-400 bg-clip-text text-transparent">
+          SMART BATTLE
+        </h2>
+        <div className="flex items-center gap-2 mt-4">
+          <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+          <p className="text-[11px] font-bold text-slate-400 tracking-wider uppercase">
+            Restoring Session...
+          </p>
+        </div>
       </div>
     );
   }
@@ -598,8 +657,8 @@ export default function App() {
           >
             <Routes location={location}>
               <Route path="/" element={<Navigate to="/home" replace />} />
-              <Route path="/login" element={<Auth onLogin={handleLogin} />} />
-              <Route path="/signup" element={<Auth onLogin={handleLogin} />} />
+              <Route path="/login" element={isLoggedIn ? <Navigate to="/home" replace /> : <Auth onLogin={handleLogin} />} />
+              <Route path="/signup" element={isLoggedIn ? <Navigate to="/home" replace /> : <Auth onLogin={handleLogin} />} />
               
               <Route path="/home" element={
                 <ProtectedRoute>

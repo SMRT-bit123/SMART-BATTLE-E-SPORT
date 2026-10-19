@@ -1,5 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { 
+  initializeAuth, 
+  indexedDBLocalPersistence, 
+  browserLocalPersistence, 
+  getAuth,
+  Auth
+} from 'firebase/auth';
 import { initializeFirestore, setLogLevel } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -19,7 +25,18 @@ export const db = initializeFirestore(
 );
 
 export const storage = getStorage(app);
-export const auth = getAuth();
+
+// Initialize Firebase Auth with reliable session persistence (IndexedDB + localStorage fallback)
+// This guarantees session persistence across app restarts in Android WebViews and mobile environments.
+let authInstance: Auth;
+try {
+  authInstance = initializeAuth(app, {
+    persistence: [indexedDBLocalPersistence, browserLocalPersistence]
+  });
+} catch {
+  authInstance = getAuth(app);
+}
+export const auth = authInstance;
 
 export enum OperationType {
   CREATE = 'create',
