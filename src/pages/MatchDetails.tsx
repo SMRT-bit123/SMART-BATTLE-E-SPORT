@@ -66,18 +66,27 @@ function formatMatchSchedule(timeStr?: string) {
   }
 }
 
-// Default Fallback Esports artwork based on Section/Mode
+// Default Fallback Esports artwork based on Section/Mode (Instant local assets)
 function getDefaultEsportsImage(section?: string, mode?: string) {
   const s = (section || '').toLowerCase();
   const m = (mode || '').toLowerCase();
 
-  if (s.includes('clash') || m.includes('cs')) {
-    return 'https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=1200&auto=format&fit=crop';
+  if (s.includes('clash') || m.includes('cs') || m.includes('headshot')) {
+    return '/images/regenerated_image_1791756005244.png';
   }
   if (s.includes('lone') || m.includes('wolf')) {
-    return 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200&auto=format&fit=crop';
+    return '/images/regenerated_image_1791735950149.jpg';
   }
-  return 'https://images.unsplash.com/photo-1538481199705-c710c4e965fc?q=80&w=1200&auto=format&fit=crop';
+  if (s.includes('free') || m.includes('free')) {
+    return '/images/regenerated_image_1791756013539.png';
+  }
+  if (m.includes('squad') || s.includes('squad')) {
+    return '/images/regenerated_image_1791755551692.png';
+  }
+  if (m.includes('solo') || s.includes('solo')) {
+    return '/images/regenerated_image_1791735926796.jpg';
+  }
+  return '/images/regenerated_image_1791755547255.png';
 }
 
 export default function MatchDetails({ user, onPageChange, joinedMatchIds }: MatchDetailsProps) {

@@ -25,6 +25,12 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isBannedUser() {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isBanned', false) == true;
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -48,18 +54,37 @@ service cloud.firestore {
 
     // Users: Profiles and wallet information
     match /users/{userId} {
-      function isValidUser(data) {
+      function isValidNewUser(data) {
         return data.keys().hasAll(['username', 'email', 'wallet']) &&
                data.username is string && data.username.size() <= 100 &&
                data.email is string && data.email.size() <= 200 &&
-               data.wallet is map;
+               data.wallet is map &&
+               // Security: New players MUST start with 0 coins
+               data.wallet.get('deposit', 0) == 0 &&
+               data.wallet.get('winnings', 0) == 0 &&
+               data.wallet.get('bonus', 0) == 0 &&
+               data.get('isBanned', false) == false;
       }
+
+      function isValidUserWalletUpdate(prevWallet, nextWallet) {
+        // Security: Non-admin users can ONLY decrease balances (e.g. paying entry fees or withdrawals), NEVER self-grant coins
+        return nextWallet is map &&
+               nextWallet.get('deposit', 0) <= prevWallet.get('deposit', 0) &&
+               nextWallet.get('winnings', 0) <= prevWallet.get('winnings', 0) &&
+               nextWallet.get('bonus', 0) <= prevWallet.get('bonus', 0);
+      }
+
       allow get: if true;
       allow list: if true; // Allowed for Leaderboard
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow create: if isOwner(userId) && isValidNewUser(request.resource.data);
       allow update: if (isOwner(userId) || isAdmin()) && (
         isAdmin() || (
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username', 'phone', 'wallet', 'stats', 'isKycVerified', 'referralClaimed', 'deviceId'])
+          // Banned users cannot update their profile
+          !isBannedUser() &&
+          // Cannot modify administrative, ban status, or role fields
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'isBanned', 'banReason', 'bannedAt', 'bannedBy']) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username', 'phone', 'wallet', 'stats', 'isKycVerified', 'referralClaimed', 'deviceId', 'ign', 'gameIGNs']) &&
+          isValidUserWalletUpdate(resource.data.wallet, request.resource.data.wallet)
         )
       );
     }
@@ -81,7 +106,7 @@ service cloud.firestore {
       allow read, list, get: if true;
       allow create: if isAdmin();
       allow delete: if isAdmin();
-      allow update: if isSignedIn() && (
+      allow update: if isSignedIn() && !isBannedUser() && (
         isAdmin() || 
         (request.resource.data.diff(resource.data).affectedKeys().hasAny(['players', 'playersCount'])) ||
         (request.resource.data.diff(resource.data).affectedKeys().hasAny(['roomId', 'roomPassword', 'roomReleaseTime', 'status', 'updatedAt']))
@@ -101,13 +126,21 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Admin Logs: Audit trail for admin ban/unban and financial adjustments (Immutable)
+    match /adminLogs/{logId} {
+      allow read, list, get: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if false;
+    }
+
     // Registrations: Player entries into matches
     match /registrations/{registrationId} {
       allow get: if isSignedIn();
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isAdmin() || (isOwner(resource.data.userId) && request.resource.data.userId == resource.data.userId);
-      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      // Security: Banned users cannot join matches
+      allow create: if isSignedIn() && !isBannedUser() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAdmin() || (isOwner(resource.data.userId) && !isBannedUser() && request.resource.data.userId == resource.data.userId);
+      allow delete: if isAdmin() || (isSignedIn() && !isBannedUser() && resource.data.userId == request.auth.uid);
     }
 
     // Transactions: Financial audit trail (Immutable)
@@ -119,7 +152,8 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid || 
         resource.data.type == 'win'
       );
-      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || isAdmin());
+      // Security: Banned users cannot create transactions
+      allow create: if isSignedIn() && !isBannedUser() && (request.resource.data.userId == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();
     }
 

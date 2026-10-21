@@ -19,12 +19,12 @@ interface AuthProps {
 
 const DEFAULT_USER_DATA = {
   wallet: {
-    deposit: 500,
+    deposit: 0,
     winnings: 0,
-    bonus: 200,
+    bonus: 0,
   },
-  walletBalance: 700,
-  bonus: 200,
+  walletBalance: 0,
+  bonus: 0,
   winnings: 0,
   isKycVerified: false,
   stats: {

@@ -212,7 +212,7 @@ export default function JoinMatch({ user, onPageChange, joinedMatchIds, onJoinSu
 
   // Final Join Action in Step 4
   const handleFinalJoin = async () => {
-    if (selectedSlots.length === 0 || !matchId || !auth.currentUser) return;
+    if (loading || selectedSlots.length === 0 || !matchId || !auth.currentUser) return;
     
     // Check if main IGN is provided
     if (!inGameName) {
@@ -256,6 +256,10 @@ export default function JoinMatch({ user, onPageChange, joinedMatchIds, onJoinSu
 
         const userData = userDoc.data() as UserType;
         const tournamentData = matchDoc.data() as Tournament;
+
+        if (userData.isBanned) {
+          throw new Error('Your account has been restricted from joining tournaments.');
+        }
 
         if ((tournamentData.players as any[])?.some((p: any) => p.userId === auth.currentUser?.uid)) {
           throw new Error('You have already joined this match.');

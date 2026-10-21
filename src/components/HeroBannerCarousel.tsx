@@ -12,7 +12,7 @@ interface HeroBannerCarouselProps {
 const FALLBACK_BANNERS: Banner[] = [
   {
     id: 'wp-channel-banner',
-    imageUrl: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200&auto=format&fit=crop',
+    imageUrl: '/images/regenerated_image_1791755547255.png',
     redirectUrl: 'https://whatsapp.com/channel',
     type: 'main',
     order: 1,
@@ -20,7 +20,7 @@ const FALLBACK_BANNERS: Banner[] = [
   },
   {
     id: 'esports-banner-2',
-    imageUrl: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=1200&auto=format&fit=crop',
+    imageUrl: '/images/regenerated_image_1791756013539.png',
     redirectUrl: '',
     type: 'main',
     order: 2,
@@ -103,7 +103,7 @@ export default function HeroBannerCarousel({ banners, onPageChange }: HeroBanner
                 {/* Character Left Artwork */}
                 <div className="relative z-10 w-28 sm:w-36 h-full flex items-end">
                   <img
-                    src="/images/regenerated_image_1791755567104.png"
+                    src="/images/regenerated_image_1791755547255.png"
                     onError={(e) => { e.currentTarget.src = '/logo.png'; }}
                     alt="Free Fire Hero"
                     className="w-full h-full object-cover rounded-xl shadow-md border border-white/60"

@@ -90,7 +90,7 @@ export default function Withdraw({ user, onPageChange }: WithdrawProps) {
   };
 
   const handleWithdraw = async () => {
-    if (!auth.currentUser || !amount) return;
+    if (loading || !auth.currentUser || !amount) return;
     const value = parseInt(amount);
 
     if (isNaN(value) || value < 100) {
@@ -132,6 +132,10 @@ export default function Withdraw({ user, onPageChange }: WithdrawProps) {
         if (!uSnap.exists()) throw new Error('User profile not found');
         
         const userData = uSnap.data() as User;
+        if (userData.isBanned) {
+          throw new Error('Your account is restricted. Withdrawals are currently disabled.');
+        }
+
         const currentWinnings = userData.wallet?.winnings || 0;
         
         if (currentWinnings < value) {

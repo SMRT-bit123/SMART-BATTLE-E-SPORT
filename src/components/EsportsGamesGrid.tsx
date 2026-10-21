@@ -49,14 +49,14 @@ const getModeImage = (mode: GameMode, index: number) => {
   if (cleanId === 'free_match') return '/images/regenerated_image_1791756013539.png';
   if (cleanId === 'cs_headshot') return '/images/regenerated_image_1791756005244.png';
   
-  // If mode image in DB is dead ibb.co or invalid, directly use the high-quality local artwork
-  if (!mode.image || mode.image.includes('i.ibb.co') || mode.image.includes('1791755555487') || mode.image.includes('1791755557083')) {
+  // If mode image in DB is dead test URL or missing, use high-quality local artwork
+  if (!mode.image || mode.image.includes('i.ibb.co/v4v8Q5N/freefire.jpg') || mode.image.includes('1791755555487') || mode.image.includes('1791755557083')) {
     if (MODE_IMAGE_MAP[cleanId]) return MODE_IMAGE_MAP[cleanId];
     if (MODE_IMAGE_MAP[mode.id]) return MODE_IMAGE_MAP[mode.id];
   }
 
-  if (mode.image && !mode.image.includes('i.ibb.co')) {
-    return mode.image.replace('/src/assets/images/', '/images/');
+  if (mode.image && !mode.image.includes('i.ibb.co/v4v8Q5N/freefire.jpg')) {
+    return mode.image.replace('/src/assets/images/', '/images/').replace('src/assets/images/', '/images/');
   }
 
   if (MODE_IMAGE_MAP[cleanId]) return MODE_IMAGE_MAP[cleanId];

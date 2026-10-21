@@ -86,6 +86,45 @@ export async function uploadOriginalImage(
   }
 
   if (onProgress) onProgress(100);
+  
+  // If fallback to base64 is needed, ensure it fits within Firestore's 1MB limit safely (< 400KB)
+  if (base64String.length > 500000 && typeof window !== 'undefined') {
+    try {
+      const resized = await new Promise<string>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1200;
+          let w = img.width;
+          let h = img.height;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round((h * maxDim) / w);
+              w = maxDim;
+            } else {
+              w = Math.round((w * maxDim) / h);
+              h = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.82));
+          } else {
+            resolve(base64String);
+          }
+        };
+        img.onerror = () => resolve(base64String);
+        img.src = base64String;
+      });
+      return resized;
+    } catch {
+      return base64String;
+    }
+  }
+
   return base64String;
 }
 

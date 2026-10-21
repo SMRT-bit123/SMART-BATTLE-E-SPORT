@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom';
 import { Page, User } from './types';
@@ -33,9 +33,9 @@ import GlobalNotificationListener from './components/GlobalNotificationListener'
 
 const DEFAULT_USER_DATA = {
   wallet: {
-    deposit: 500, // Increased default for easier testing
+    deposit: 0,
     winnings: 0,
-    bonus: 200,
+    bonus: 0,
   },
   isKycVerified: false,
   isAdmin: false,
@@ -119,13 +119,60 @@ export default function App() {
   });
   const [loading, setLoading] = useState(true);
   const [joinedMatchIds, setJoinedMatchIds] = useState<string[]>([]);
+  const hasSeededRef = useRef(false);
+  const isProcessingReferralRef = useRef(false);
+
+  // Proactively refresh session token when waking from tab suspension / 1-2 hours inactivity
+  useEffect(() => {
+    const handleWakeSession = async () => {
+      if (document.visibilityState === 'visible' && auth.currentUser) {
+        try {
+          await auth.currentUser.getIdToken(false);
+          console.log('[Auth] Session token validated/refreshed on tab wake');
+        } catch (err: any) {
+          console.warn('[Auth] Wake token refresh warning:', err?.message);
+          if (
+            err?.code === 'auth/user-disabled' ||
+            err?.code === 'auth/user-token-expired' ||
+            err?.code === 'auth/user-not-found'
+          ) {
+            handleLogout();
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleWakeSession);
+    window.addEventListener('focus', handleWakeSession);
+    window.addEventListener('online', handleWakeSession);
+
+    // Keep session refreshed periodically every 45 minutes
+    const sessionKeepAliveInterval = setInterval(async () => {
+      if (auth.currentUser) {
+        try {
+          await auth.currentUser.getIdToken(true);
+        } catch {
+          // Network errors during background keep-alive must never destroy valid session
+        }
+      }
+    }, 45 * 60 * 1000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleWakeSession);
+      window.removeEventListener('focus', handleWakeSession);
+      window.removeEventListener('online', handleWakeSession);
+      clearInterval(sessionKeepAliveInterval);
+    };
+  }, []);
 
   useEffect(() => {
     let unsubscribeUser: (() => void) | null = null;
 
     const seedDatabase = async (email: string, uid: string) => {
+      if (hasSeededRef.current) return;
       const admins = ["qupagaming@gmail.com", "mahendrathakur9009@gmail.com", "mahendrar9009@gmail.com", "ankushsharma3948@gmail.com"];
       if (!admins.includes(email) && uid !== "XoXyXcnrlzOaMIKKolXnU3mT9xn1") return;
+      hasSeededRef.current = true;
       try {
         // Independence seeding for games
         const gamesSnap = await getDocs(collection(db, 'games'));
@@ -282,10 +329,10 @@ export default function App() {
           await batch.commit();
           console.log('Game modes seeded from constants');
         } else {
-          // Auto-repair any mode in Firestore that has dead ibb.co or legacy paths
+          // Auto-repair any mode in Firestore that has the specific dead test URL or legacy src paths
           for (const mDoc of modesSnap.docs) {
             const data = mDoc.data();
-            if (data.image && (data.image.includes('i.ibb.co') || data.image.startsWith('/src/assets/images/'))) {
+            if (data.image && (data.image.includes('i.ibb.co/v4v8Q5N/freefire.jpg') || data.image.startsWith('/src/assets/images/') || data.image.startsWith('src/assets/images/'))) {
               const cleanId = (data.id || '').replace(/^freefire_/, '');
               const targetImg = (GAME_MODES_DATA['freefire']?.find(m => m.id === cleanId)?.image) || '/images/regenerated_image_1791755547255.png';
               try {
@@ -332,7 +379,7 @@ export default function App() {
               
               // Only migrate if we have some old data, otherwise use defaults
               if (data.walletBalance === undefined && data.winnings === undefined && data.bonus === undefined) {
-                Object.assign(migratedWallet, DEFAULT_USER_DATA.wallet);
+                Object.assign(migratedWallet, { deposit: 0, winnings: 0, bonus: 0 });
               }
 
               const batch = writeBatch(db);
@@ -488,7 +535,8 @@ export default function App() {
   };
 
   const processReferralReward = async (currentUser: any, uid: string) => {
-    if (!currentUser.referredBy || currentUser.referralClaimed) return;
+    if (!currentUser.referredBy || currentUser.referralClaimed || isProcessingReferralRef.current) return;
+    isProcessingReferralRef.current = true;
 
     console.log("Checking referral reward for user:", currentUser.username);
     try {
@@ -638,6 +686,11 @@ export default function App() {
   return (
     <div className="min-h-screen bg-background relative selection:bg-primary/20">
       <ScrollToTop />
+      {user?.isBanned && (
+        <div className="bg-red-600 text-white px-4 py-3 text-center text-[11px] font-black uppercase tracking-wider sticky top-0 z-50 flex items-center justify-center gap-2 shadow-xl backdrop-blur-md border-b border-red-700">
+          <span>⚠️ ACCOUNT RESTRICTED: {user.banReason ? `Reason: ${user.banReason}` : 'Account suspended for rule violations'}. Match joining and wallet withdrawals are disabled.</span>
+        </div>
+      )}
       <GlobalNotificationListener 
         user={user} 
         joinedMatchIds={joinedMatchIds} 

@@ -29,28 +29,36 @@ interface AdminModesProps {
 // Curated High-Definition Preset Covers for Easy Selection
 const PRESET_COVERS = [
   {
-    name: 'Battle Royale Classic',
-    url: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200&auto=format&fit=crop'
+    name: 'Battle Royale Duo',
+    url: '/images/regenerated_image_1791755547255.png'
   },
   {
-    name: 'Clash Squad / 4v4',
-    url: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=1200&auto=format&fit=crop'
+    name: 'Battle Royale Solo',
+    url: '/images/regenerated_image_1791735926796.jpg'
   },
   {
-    name: 'Lone Wolf / 1v1',
-    url: 'https://images.unsplash.com/photo-1579373903781-fd5c0c30c4cd?q=80&w=1200&auto=format&fit=crop'
+    name: 'Battle Royale Squad',
+    url: '/images/regenerated_image_1791755551692.png'
   },
   {
-    name: 'Survival Arena',
-    url: 'https://images.unsplash.com/photo-1538481199705-c710c4e965fc?q=80&w=1200&auto=format&fit=crop'
+    name: 'Free Match / Tournament',
+    url: '/images/regenerated_image_1791756013539.png'
+  },
+  {
+    name: 'CS Headshot Arena',
+    url: '/images/regenerated_image_1791756005244.png'
+  },
+  {
+    name: 'CS Clash Squad Solo',
+    url: '/images/regenerated_image_1791755559649.png'
+  },
+  {
+    name: 'Lone Wolf Duo',
+    url: '/images/regenerated_image_1791735950149.jpg'
   },
   {
     name: 'Cyberpunk Esports',
     url: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=1200&auto=format&fit=crop'
-  },
-  {
-    name: 'Sniper / Stealth',
-    url: 'https://images.unsplash.com/photo-1563089145-599997674d42?q=80&w=1200&auto=format&fit=crop'
   }
 ];
 

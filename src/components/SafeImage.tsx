@@ -15,23 +15,32 @@ const PRIMARY_LOGO = "/logo.png";
 const VECTOR_LOGO = "/logo.svg";
 const DEFAULT_GAMING_WALLPAPER = "/images/regenerated_image_1791755547255.png";
 
+const OBJECT_FIT_MAP: Record<string, string> = {
+  cover: 'object-cover',
+  contain: 'object-contain',
+  fill: 'object-fill',
+  none: 'object-none',
+  'scale-down': 'object-scale-down'
+};
+
 /**
  * Normalizes image paths to ensure instant loading & compatibility with:
  * - Vite dev & production builds
  * - Android WebView / APK (direct static assets)
  * - Mobile browsers & CDN caches
- * - Eliminates dead external URLs (like i.ibb.co/v4v8Q5N/freefire.jpg)
+ * - Preserves real user-uploaded ImgBB URLs while replacing the known dead test URL
  */
 export function normalizeImagePath(path?: string): string {
   if (!path) return DEFAULT_GAMING_WALLPAPER;
   const p = path.trim();
+  if (!p) return DEFAULT_GAMING_WALLPAPER;
 
-  // Fix dead ibb.co Free Fire test URL
-  if (p.includes('i.ibb.co/v4v8Q5N/freefire.jpg') || p.includes('i.ibb.co')) {
+  // Fix only the specific dead ibb.co Free Fire test URL
+  if (p.includes('i.ibb.co/v4v8Q5N/freefire.jpg')) {
     return DEFAULT_GAMING_WALLPAPER;
   }
 
-  // Convert old /src/assets/images/ to public /images/
+  // Convert old /src/assets/images/ or src/assets/images/ to public /images/
   if (p.startsWith('/src/assets/images/')) {
     return '/images/' + p.slice('/src/assets/images/'.length);
   }
@@ -39,6 +48,9 @@ export function normalizeImagePath(path?: string): string {
     return '/images/' + p.slice('src/assets/images/'.length);
   }
   if (p.startsWith('src/assets/')) {
+    return '/' + p;
+  }
+  if (p.startsWith('images/')) {
     return '/' + p;
   }
   return p;
@@ -64,7 +76,13 @@ export default function SafeImage({
     setCurrentSrc(normalized);
     setHasError(false);
     setRetryStage(0);
-    setIsLoading(true);
+
+    // Fast check: if the DOM node already has this image loaded
+    if (imgRef.current && imgRef.current.complete && imgRef.current.naturalWidth > 0) {
+      setIsLoading(false);
+    } else {
+      setIsLoading(true);
+    }
   }, [src]);
 
   // Check if image is already cached/complete immediately
@@ -73,6 +91,19 @@ export default function SafeImage({
       setIsLoading(false);
     }
   }, [currentSrc]);
+
+  // Network timeout watchdog (5s) to avoid staying in infinite loader state
+  useEffect(() => {
+    if (!isLoading || hasError) return;
+    const timer = setTimeout(() => {
+      if (imgRef.current && !imgRef.current.complete) {
+        handleError();
+      } else if (imgRef.current && imgRef.current.complete) {
+        setIsLoading(false);
+      }
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [isLoading, currentSrc, hasError]);
 
   const handleLoad = () => {
     setIsLoading(false);
@@ -116,6 +147,8 @@ export default function SafeImage({
     setIsLoading(false);
   };
 
+  const fitClass = OBJECT_FIT_MAP[objectFit] || 'object-cover';
+
   return (
     <div className={`relative overflow-hidden bg-neutral-900 ${className}`}>
       {/* Background / Placeholder during loading */}
@@ -144,12 +177,10 @@ export default function SafeImage({
           alt={alt}
           onLoad={handleLoad}
           onError={handleError}
-          loading="lazy"
           decoding="async"
-          className={`w-full h-full object-${objectFit} transition-opacity duration-200 relative z-10 ${
+          className={`w-full h-full ${fitClass} transition-opacity duration-200 relative z-10 ${
             isLoading ? 'opacity-0' : 'opacity-100'
           } ${imgClassName}`}
-          referrerPolicy="no-referrer"
         />
       ) : (
         /* Ultimate graceful offline/missing UI */
