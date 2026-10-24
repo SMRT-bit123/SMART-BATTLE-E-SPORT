@@ -5,7 +5,8 @@ import { Page, User } from './types';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import { auth, db, handleFirestoreError, OperationType } from './lib/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, onIdTokenChanged } from 'firebase/auth';
+import { AuthLogger } from './utils/authDiagnostics';
 import { doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, getDocs, writeBatch, onSnapshot, increment, updateDoc } from 'firebase/firestore';
 import { GAMES } from './constants';
 
@@ -122,21 +123,45 @@ export default function App() {
   const hasSeededRef = useRef(false);
   const isProcessingReferralRef = useRef(false);
 
-  // Proactively refresh session token when waking from tab suspension / 1-2 hours inactivity
+  // Proactively manage & refresh session tokens when waking from tab suspension, backgrounding, or 1-2 hours inactivity
   useEffect(() => {
+    let isMounted = true;
+
     const handleWakeSession = async () => {
-      if (document.visibilityState === 'visible' && auth.currentUser) {
+      const isVisible = document.visibilityState === 'visible';
+      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+      AuthLogger.wakeEvent('tab_wake_check', isVisible, isOnline);
+
+      if (isVisible && auth.currentUser) {
         try {
-          await auth.currentUser.getIdToken(false);
-          console.log('[Auth] Session token validated/refreshed on tab wake');
+          // Read current token info safely without forcing refresh first
+          const tokenResult = await auth.currentUser.getIdTokenResult(false);
+          const expTime = new Date(tokenResult.expirationTime).getTime();
+          const remainingMs = expTime - Date.now();
+
+          // If token has less than 5 minutes remaining or is already expired (> 1 hour old), refresh it proactively
+          if (remainingMs < 5 * 60 * 1000) {
+            AuthLogger.refreshAttempt('wake_session', `Token near/past expiry (${Math.round(remainingMs / 60000)}m left)`);
+            await auth.currentUser.getIdToken(true);
+            const renewedResult = await auth.currentUser.getIdTokenResult(false);
+            AuthLogger.refreshSuccess(renewedResult.expirationTime);
+          } else {
+            AuthLogger.tokenStatus(auth.currentUser, 'wake_valid');
+          }
         } catch (err: any) {
-          console.warn('[Auth] Wake token refresh warning:', err?.message);
-          if (
-            err?.code === 'auth/user-disabled' ||
-            err?.code === 'auth/user-token-expired' ||
-            err?.code === 'auth/user-not-found'
-          ) {
-            handleLogout();
+          const isNetError = 
+            !navigator.onLine || 
+            err?.code === 'auth/network-request-failed' ||
+            err?.message?.includes('network') ||
+            err?.message?.includes('offline');
+
+          AuthLogger.refreshError(err, isNetError);
+
+          // CRITICAL: NEVER log out user on network/offline errors or general expired tokens!
+          // An expired access token is normal after 1-2 hours; the refresh token remains valid.
+          // ONLY log out if the user has been explicitly disabled or deleted by the Firebase backend:
+          if (err?.code === 'auth/user-disabled' || err?.code === 'auth/user-not-found') {
+            handleLogout('Account disabled or removed by server');
           }
         }
       }
@@ -146,18 +171,28 @@ export default function App() {
     window.addEventListener('focus', handleWakeSession);
     window.addEventListener('online', handleWakeSession);
 
-    // Keep session refreshed periodically every 45 minutes
+    // Keep session refreshed periodically every 15 minutes when tab is active
     const sessionKeepAliveInterval = setInterval(async () => {
-      if (auth.currentUser) {
+      if (!isMounted) return;
+      if (auth.currentUser && document.visibilityState === 'visible') {
         try {
-          await auth.currentUser.getIdToken(true);
-        } catch {
+          const tokenResult = await auth.currentUser.getIdTokenResult(false);
+          const remainingMs = new Date(tokenResult.expirationTime).getTime() - Date.now();
+          if (remainingMs < 15 * 60 * 1000) {
+            AuthLogger.refreshAttempt('periodic_keepalive', 'Proactive 15m window');
+            await auth.currentUser.getIdToken(true);
+            const renewed = await auth.currentUser.getIdTokenResult(false);
+            AuthLogger.refreshSuccess(renewed.expirationTime);
+          }
+        } catch (err: any) {
           // Network errors during background keep-alive must never destroy valid session
+          AuthLogger.refreshError(err, true);
         }
       }
-    }, 45 * 60 * 1000);
+    }, 15 * 60 * 1000);
 
     return () => {
+      isMounted = false;
       document.removeEventListener('visibilitychange', handleWakeSession);
       window.removeEventListener('focus', handleWakeSession);
       window.removeEventListener('online', handleWakeSession);
@@ -166,8 +201,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    let unsubscribeUser: (() => void) | null = null;
-
     const seedDatabase = async (email: string, uid: string) => {
       if (hasSeededRef.current) return;
       const admins = ["qupagaming@gmail.com", "mahendrathakur9009@gmail.com", "mahendrar9009@gmail.com", "ankushsharma3948@gmail.com"];
@@ -351,159 +384,210 @@ export default function App() {
       }
     };
 
-    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (unsubscribeUser) {
-        unsubscribeUser();
-        unsubscribeUser = null;
+    let unsubscribeUser: (() => void) | null = null;
+    let unsubscribeIdToken: (() => void) | null = null;
+    let unsubscribeAuth: (() => void) | null = null;
+    let isMounted = true;
+
+    const setupAuth = async () => {
+      AuthLogger.sessionInit('Awaiting auth.authStateReady() for persistent session recovery');
+      
+      // Wait for Firebase Auth persistence (IndexedDB/localStorage) to finish loading
+      try {
+        await auth.authStateReady();
+        AuthLogger.sessionInit('auth.authStateReady() resolved');
+      } catch (e: any) {
+        console.warn('[Auth] authStateReady resolution notice:', e?.message);
       }
 
-      if (firebaseUser) {
-        // Seed if admin
-        seedDatabase(firebaseUser.email || '', firebaseUser.uid);
+      if (!isMounted) return;
 
-        const userDocRef = doc(db, 'users', firebaseUser.uid);
-        
-        // Listen for user changes (balance, etc.)
-        unsubscribeUser = onSnapshot(userDocRef, async (userDoc) => {
-          if (userDoc.exists()) {
-            const data = userDoc.data() as any;
-            
-            // Migration check: if user doesn't have the new wallet structure
-            if (!data.wallet) {
-              console.log("Migrating user wallet structure...");
-              const migratedWallet = {
-                deposit: data.walletBalance || 0,
-                winnings: data.winnings || 0,
-                bonus: data.bonus || 0
-              };
+      // Monitor token changes/refresh events proactively
+      unsubscribeIdToken = onIdTokenChanged(auth, async (currentUser) => {
+        if (!isMounted) return;
+        if (currentUser) {
+          AuthLogger.tokenStatus(currentUser, 'token_refresh_sync');
+          setIsLoggedIn(true);
+        }
+      });
+
+      // Main authentication state listener
+      unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (!isMounted) return;
+
+        if (unsubscribeUser) {
+          unsubscribeUser();
+          unsubscribeUser = null;
+        }
+
+        if (firebaseUser) {
+          // 1. Immediately confirm authenticated status (never wait for remote Firestore network packet)
+          setIsLoggedIn(true);
+          AuthLogger.sessionRestored(firebaseUser);
+
+          // 2. Check token freshness and renew proactively if expired
+          try {
+            const tokenRes = await firebaseUser.getIdTokenResult(false);
+            const remainingMs = new Date(tokenRes.expirationTime).getTime() - Date.now();
+            if (remainingMs <= 0) {
+              AuthLogger.refreshAttempt('session_restore', 'Expired token detected on startup');
+              await firebaseUser.getIdToken(true);
+              const renewed = await firebaseUser.getIdTokenResult(false);
+              AuthLogger.refreshSuccess(renewed.expirationTime);
+            }
+          } catch (tokErr: any) {
+            AuthLogger.refreshError(tokErr, !navigator.onLine);
+          }
+
+          // 3. Seed database if admin
+          seedDatabase(firebaseUser.email || '', firebaseUser.uid);
+
+          const userDocRef = doc(db, 'users', firebaseUser.uid);
+          
+          // 4. Listen for real-time user changes (balances, bans, admin status)
+          unsubscribeUser = onSnapshot(userDocRef, async (userDoc) => {
+            if (!isMounted) return;
+            if (userDoc.exists()) {
+              const data = userDoc.data() as any;
               
-              // Only migrate if we have some old data, otherwise use defaults
-              if (data.walletBalance === undefined && data.winnings === undefined && data.bonus === undefined) {
-                Object.assign(migratedWallet, { deposit: 0, winnings: 0, bonus: 0 });
+              // Migration check: if user doesn't have the new wallet structure
+              if (!data.wallet) {
+                console.log("Migrating user wallet structure...");
+                const migratedWallet = {
+                  deposit: data.walletBalance || 0,
+                  winnings: data.winnings || 0,
+                  bonus: data.bonus || 0
+                };
+                
+                if (data.walletBalance === undefined && data.winnings === undefined && data.bonus === undefined) {
+                  Object.assign(migratedWallet, { deposit: 0, winnings: 0, bonus: 0 });
+                }
+
+                const batch = writeBatch(db);
+                batch.update(userDocRef, { wallet: migratedWallet });
+                await batch.commit();
+                return;
               }
 
-              const batch = writeBatch(db);
-              batch.update(userDocRef, {
-                wallet: migratedWallet
+              const currentEmail = (firebaseUser.email || data.email || '').toLowerCase().trim();
+              const adminEmails = [
+                'qupagaming@gmail.com',
+                'mahendrathakur9009@gmail.com',
+                'mahendrar9009@gmail.com',
+                'ankushsharma3948@gmail.com'
+              ];
+              const isUserAdmin = Boolean(
+                data.isAdmin ||
+                adminEmails.includes(currentEmail) ||
+                firebaseUser.uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1'
+              );
+
+              // Persist isAdmin: true to Firestore user document if missing
+              if (isUserAdmin && !data.isAdmin) {
+                updateDoc(userDocRef, { isAdmin: true }).catch((err) => {
+                  console.warn('Could not auto-update isAdmin flag in user doc:', err);
+                });
+              }
+
+              const updatedUser = { id: userDoc.id, ...data, isAdmin: isUserAdmin } as User;
+              setUser(updatedUser);
+              setIsLoggedIn(true);
+              setLoading(false);
+              try {
+                localStorage.setItem('smart_battle_cached_user', JSON.stringify(updatedUser));
+              } catch {}
+
+              // Process referral rewards if eligible
+              if (data.referredBy && !data.referralClaimed) {
+                processReferralReward(data, firebaseUser.uid);
+              }
+              
+              // Immediate redirect to home if on login/signup pages
+              const currentPath = window.location.pathname;
+              if (currentPath === '/login' || currentPath === '/signup' || currentPath === '/') {
+                navigate('/home', { replace: true });
+              }
+            } else {
+              // For Google Auth or unexpected cases, create default profile
+              const isAdmin = firebaseUser.email === 'mahendrathakur9009@gmail.com' || 
+                             firebaseUser.email === 'mahendrar9009@gmail.com' || 
+                             firebaseUser.email === 'qupagaming@gmail.com' ||
+                             firebaseUser.email === 'ankushsharma3948@gmail.com' ||
+                             firebaseUser.uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1';
+              const newUser: User = {
+                username: firebaseUser.displayName || `Gamer_${firebaseUser.uid.slice(0, 5)}`,
+                email: firebaseUser.email || `gamer_${firebaseUser.uid.slice(0, 6)}@smartbattle.com`,
+                phone: firebaseUser.phoneNumber || '',
+                ...DEFAULT_USER_DATA,
+                isAdmin: isAdmin
+              };
+              await setDoc(userDocRef, {
+                ...newUser,
+                createdAt: serverTimestamp(),
               });
-              await batch.commit();
-              // The next snapshot will have the right data
-              return;
+              setUser({ id: firebaseUser.uid, ...newUser });
+              setIsLoggedIn(true);
+              setLoading(false);
             }
-
-            const currentEmail = (firebaseUser.email || data.email || '').toLowerCase().trim();
-            const adminEmails = [
-              'qupagaming@gmail.com',
-              'mahendrathakur9009@gmail.com',
-              'mahendrar9009@gmail.com',
-              'ankushsharma3948@gmail.com'
-            ];
-            const isUserAdmin = Boolean(
-              data.isAdmin ||
-              adminEmails.includes(currentEmail) ||
-              firebaseUser.uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1'
-            );
-
-            // Persist isAdmin: true to Firestore user document if missing
-            if (isUserAdmin && !data.isAdmin) {
-              updateDoc(userDocRef, { isAdmin: true }).catch((err) => {
-                console.warn('Could not auto-update isAdmin flag in user doc:', err);
-              });
-            }
-
-            const updatedUser = { id: userDoc.id, ...data, isAdmin: isUserAdmin } as User;
-            setUser(updatedUser);
+          }, (error) => {
+            handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+            // CRITICAL: NEVER log out user or destroy session on transient Firestore connection errors!
+            try {
+              const cached = localStorage.getItem('smart_battle_cached_user');
+              if (cached) {
+                const parsed = JSON.parse(cached);
+                if (parsed && parsed.id === firebaseUser.uid) {
+                  setUser(parsed);
+                }
+              }
+            } catch {}
             setIsLoggedIn(true);
             setLoading(false);
-            try {
-              localStorage.setItem('smart_battle_cached_user', JSON.stringify(updatedUser));
-            } catch {
-              // Ignore storage exceptions
-            }
+          });
 
-            // Process referral rewards if eligible
-            if (data.referredBy && !data.referralClaimed) {
-              processReferralReward(data, firebaseUser.uid);
-            }
-            
-            // Immediate redirect to home if on login/signup pages
-            const currentPath = window.location.pathname;
-            if (currentPath === '/login' || currentPath === '/signup' || currentPath === '/') {
-              console.log("Redirecting to home...");
-              navigate('/home', { replace: true });
-            }
-          } else {
-            // For Google Auth or unexpected cases, create default profile
-            const isAdmin = firebaseUser.email === 'mahendrathakur9009@gmail.com' || 
-                           firebaseUser.email === 'mahendrar9009@gmail.com' || 
-                           firebaseUser.email === 'qupagaming@gmail.com' ||
-                           firebaseUser.email === 'ankushsharma3948@gmail.com' ||
-                           firebaseUser.uid === 'XoXyXcnrlzOaMIKKolXnU3mT9xn1';
-            const newUser: User = {
-              username: firebaseUser.displayName || `Gamer_${firebaseUser.uid.slice(0, 5)}`,
-              email: firebaseUser.email || `gamer_${firebaseUser.uid.slice(0, 6)}@smartbattle.com`,
-              phone: firebaseUser.phoneNumber || '',
-              ...DEFAULT_USER_DATA,
-              isAdmin: isAdmin
-            };
-            await setDoc(userDocRef, {
-              ...newUser,
-              createdAt: serverTimestamp(),
-            });
-            // Snapshot will pick this up
-          }
-        }, (error) => {
-          handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
-          // If cached user exists for this session, keep user authenticated
+          // Also fetch registrations in background
           try {
-            const cached = localStorage.getItem('smart_battle_cached_user');
-            if (cached) {
-              const parsed = JSON.parse(cached);
-              if (parsed && parsed.id === firebaseUser.uid) {
-                setUser(parsed);
-                setIsLoggedIn(true);
-              }
-            }
+            const q = query(collection(db, 'registrations'), where('userId', '==', firebaseUser.uid));
+            const regSnap = await getDocs(q);
+            const matchIds = regSnap.docs.map(doc => doc.data().tournamentId);
+            setJoinedMatchIds(matchIds);
+          } catch (error) {
+            console.warn("Notice: registrations fetch in background:", error);
+          }
+        } else {
+          // Genuinely unauthenticated state (only runs after authStateReady has verified storage)
+          AuthLogger.sessionInit('No authenticated user session found');
+          setIsLoggedIn(false);
+          setUser(null);
+          setJoinedMatchIds([]);
+          try {
+            localStorage.removeItem('smart_battle_cached_user');
           } catch {}
+          const currentPath = window.location.pathname;
+          if (!['/login', '/signup'].includes(currentPath)) {
+            navigate('/login', { replace: true });
+          }
           setLoading(false);
-        });
+        }
+      });
+    };
 
-        // Also fetch registrations
-        try {
-          const q = query(collection(db, 'registrations'), where('userId', '==', firebaseUser.uid));
-          const regSnap = await getDocs(q);
-          const matchIds = regSnap.docs.map(doc => doc.data().tournamentId);
-          setJoinedMatchIds(matchIds);
-        } catch (error) {
-          console.error("Error fetching registrations:", error);
-        }
-      } else {
-        setIsLoggedIn(false);
-        setUser(null);
-        setJoinedMatchIds([]);
-        try {
-          localStorage.removeItem('smart_battle_cached_user');
-        } catch {}
-        const currentPath = window.location.pathname;
-        if (!['/login', '/signup'].includes(currentPath)) {
-          navigate('/login', { replace: true });
-        }
-        setLoading(false);
-      }
-    });
+    setupAuth();
 
     return () => {
-      unsubscribeAuth();
+      isMounted = false;
+      if (unsubscribeAuth) unsubscribeAuth();
+      if (unsubscribeIdToken) unsubscribeIdToken();
       if (unsubscribeUser) unsubscribeUser();
     };
   }, []);
 
   const handleLogin = () => {
-    console.log("Redirecting to home...");
     navigate('/home', { replace: true });
   };
 
-  const handleLogout = async () => {
+  const handleLogout = async (reason = 'User initiated logout') => {
+    AuthLogger.logout(reason, auth.currentUser?.uid);
     try {
       localStorage.removeItem('smart_battle_cached_user');
       await auth.signOut();
@@ -664,10 +748,21 @@ export default function App() {
 
   // Protected route wrapper
   const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-    if (!isLoggedIn && !loading) {
+    // 1. While initial session is being restored/verified from storage, never redirect to login
+    if (loading) {
+      return (
+        <div className="min-h-screen bg-[#07152b] flex flex-col items-center justify-center p-6 text-white select-none">
+          <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+          <p className="mt-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Verifying session...</p>
+        </div>
+      );
+    }
+    // 2. Only if fully checked and user is not logged in, redirect to login
+    if (!isLoggedIn) {
       return <Navigate to="/login" replace />;
     }
-    if (!user && isLoggedIn) {
+    // 3. User is logged in, but Firestore profile is streaming
+    if (!user) {
       return (
         <div className="flex flex-col items-center justify-center pt-24">
           <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -778,7 +873,7 @@ export default function App() {
 
               <Route path="/profile" element={
                 <ProtectedRoute>
-                  <ProfilePage user={user} onPageChange={handlePageChange} onLogout={handleLogout} />
+                  <ProfilePage user={user} onPageChange={handlePageChange} onLogout={() => handleLogout('User clicked logout in Profile')} />
                 </ProtectedRoute>
               } />
 

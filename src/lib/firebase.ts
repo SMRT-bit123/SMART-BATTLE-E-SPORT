@@ -15,6 +15,18 @@ setLogLevel('error');
 
 const app = initializeApp(firebaseConfig);
 
+// Initialize Firebase Auth with reliable session persistence (IndexedDB + localStorage fallback)
+// This guarantees session persistence across app restarts, reloads, and mobile WebView environments.
+let authInstance: Auth;
+try {
+  authInstance = initializeAuth(app, {
+    persistence: [indexedDBLocalPersistence, browserLocalPersistence]
+  });
+} catch {
+  authInstance = getAuth(app);
+}
+export const auth = authInstance;
+
 // Initialize Firestore with force long polling to guarantee instant connection in iframe/proxy environments
 export const db = initializeFirestore(
   app,
@@ -25,18 +37,6 @@ export const db = initializeFirestore(
 );
 
 export const storage = getStorage(app);
-
-// Initialize Firebase Auth with reliable session persistence (IndexedDB + localStorage fallback)
-// This guarantees session persistence across app restarts in Android WebViews and mobile environments.
-let authInstance: Auth;
-try {
-  authInstance = initializeAuth(app, {
-    persistence: [indexedDBLocalPersistence, browserLocalPersistence]
-  });
-} catch {
-  authInstance = getAuth(app);
-}
-export const auth = authInstance;
 
 export enum OperationType {
   CREATE = 'create',
