@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useParams } from 'react-router-dom';
-import { Page, User, Transaction, Wallet } from '../types';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { Page, User, Transaction, Wallet, Tournament, HostAssignment } from '../types';
+import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { 
   doc, 
   onSnapshot, 
@@ -17,7 +17,26 @@ import {
   addDoc,
   writeBatch
 } from 'firebase/firestore';
-import { ChevronLeft, Shield, ShieldAlert, Wallet as WalletIcon, Trophy, History, Plus, Minus, User as UserIcon, Mail, Phone } from 'lucide-react';
+import { 
+  ChevronLeft, 
+  Shield, 
+  ShieldAlert, 
+  Wallet as WalletIcon, 
+  Trophy, 
+  History, 
+  Plus, 
+  Minus, 
+  User as UserIcon, 
+  Mail, 
+  Phone,
+  Gamepad2,
+  UserCheck,
+  CheckCircle2,
+  AlertCircle,
+  X,
+  Swords,
+  Clock
+} from 'lucide-react';
 
 interface AdminUserDetailProps {
   onPageChange: (page: Page, id?: string) => void;
@@ -33,6 +52,15 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
 
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
+
+  // Host Management State
+  const [hostAssignment, setHostAssignment] = useState<HostAssignment | null>(null);
+  const [availableMatches, setAvailableMatches] = useState<Tournament[]>([]);
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [isRemoveConfirmOpen, setIsRemoveConfirmOpen] = useState(false);
+  const [selectedMatchId, setSelectedMatchId] = useState('');
+  const [isHostActionLoading, setIsHostActionLoading] = useState(false);
+  const [hostFeedback, setHostFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -61,6 +89,15 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
       setTransactions(txs);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'transactions'));
 
+    // Realtime Host Assignment
+    const unsubscribeHost = onSnapshot(doc(db, 'hosts', userId), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().assignmentStatus === 'active') {
+        setHostAssignment({ id: docSnap.id, ...docSnap.data() } as HostAssignment);
+      } else {
+        setHostAssignment(null);
+      }
+    });
+
     // Joined Matches
     const fetchMatches = async () => {
       try {
@@ -83,25 +120,138 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
       }
     };
 
+    // Fetch Eligible Active/Upcoming Matches for Host Assignment
+    const fetchAvailableMatches = async () => {
+      try {
+        const matchSnap = await getDocs(collection(db, 'matches'));
+        const matches = matchSnap.docs
+          .map(d => ({ id: d.id, ...d.data() } as Tournament))
+          .filter(m => m.status !== 'completed');
+        setAvailableMatches(matches);
+        if (matches.length > 0) {
+          setSelectedMatchId(matches[0].id);
+        }
+      } catch (err) {
+        console.error("Error fetching available matches:", err);
+      }
+    };
+
     fetchMatches();
+    fetchAvailableMatches();
 
     return () => {
       unsubscribeUser();
       unsubscribeTransactions();
+      unsubscribeHost();
     };
   }, [userId]);
 
   const handleToggleBan = async () => {
     if (!userData || !userId) return;
     const newBanStatus = !userData.isBanned;
-    if (confirm(`Are you sure you want to ${newBanStatus ? 'BAN' : 'UNBAN'} this user?`)) {
+    if (confirm(`Are you sure you want to ${newBanStatus ? 'BAN' : 'UNBAN'} this player account?`)) {
       try {
         await updateDoc(doc(db, 'users', userId), {
           isBanned: newBanStatus
         });
+        setHostFeedback({
+          type: 'success',
+          message: `Player has been successfully ${newBanStatus ? 'BANNED' : 'UNBANNED'}.`
+        });
+        setTimeout(() => setHostFeedback(null), 4000);
       } catch (error) {
         handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
       }
+    }
+  };
+
+  // Host Action: Make Host
+  const handleAssignHost = async () => {
+    if (!userId || !selectedMatchId || isHostActionLoading) return;
+
+    setIsHostActionLoading(true);
+    setHostFeedback(null);
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/admin/assign-host', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          hostUserId: userId,
+          matchId: selectedMatchId
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setHostFeedback({
+          type: 'success',
+          message: data.message || 'Player successfully assigned as match host!'
+        });
+        setIsAssignModalOpen(false);
+      } else {
+        setHostFeedback({
+          type: 'error',
+          message: data.error || 'Failed to assign host'
+        });
+      }
+    } catch (err: any) {
+      setHostFeedback({
+        type: 'error',
+        message: err.message || 'Network error while assigning host'
+      });
+    } finally {
+      setIsHostActionLoading(false);
+      setTimeout(() => setHostFeedback(null), 5000);
+    }
+  };
+
+  // Host Action: Remove Host
+  const handleRemoveHost = async () => {
+    if (!userId || isHostActionLoading) return;
+
+    setIsHostActionLoading(true);
+    setHostFeedback(null);
+
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/admin/remove-host', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          hostUserId: userId,
+          matchId: hostAssignment?.matchId
+        })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setHostFeedback({
+          type: 'success',
+          message: 'Host privileges have been revoked.'
+        });
+        setIsRemoveConfirmOpen(false);
+      } else {
+        setHostFeedback({
+          type: 'error',
+          message: data.error || 'Failed to remove host'
+        });
+      }
+    } catch (err: any) {
+      setHostFeedback({
+        type: 'error',
+        message: err.message || 'Network error while removing host'
+      });
+    } finally {
+      setIsHostActionLoading(false);
+      setTimeout(() => setHostFeedback(null), 5000);
     }
   };
 
@@ -203,7 +353,7 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
           </button>
         </div>
 
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid grid-cols-1 gap-4 mb-5">
           <div className="flex items-center gap-3 p-3 bg-white/5 rounded-2xl border border-white/5">
             <Mail size={16} className="text-neutral-500" />
             <div className="flex-1 min-w-0">
@@ -217,6 +367,100 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
               <p className="text-[8px] font-black uppercase text-neutral-500 tracking-widest">Phone Number</p>
               <p className="text-sm font-medium text-white">{userData.phone || 'Not provided'}</p>
             </div>
+          </div>
+        </div>
+
+        {/* Feedback Alert Banner */}
+        {hostFeedback && (
+          <div className={`p-3.5 mb-5 rounded-2xl border flex items-center gap-2.5 text-xs font-bold ${
+            hostFeedback.type === 'success' 
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+              : 'bg-red-500/10 border-red-500/30 text-red-400'
+          }`}>
+            {hostFeedback.type === 'success' ? <CheckCircle2 size={16} className="shrink-0" /> : <AlertCircle size={16} className="shrink-0" />}
+            <span>{hostFeedback.message}</span>
+          </div>
+        )}
+
+        {/* TASK 1: ADMINISTRATIVE ACTIONS - BAN PLAYER & MAKE/REMOVE HOST */}
+        <div className="pt-4 border-t border-white/10">
+          <p className="text-[9px] font-black uppercase tracking-widest text-neutral-400 mb-3">
+            Administrative Player Controls
+          </p>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            {/* Action 1: Ban / Unban Player */}
+            <button
+              onClick={handleToggleBan}
+              className={`py-3.5 px-4 rounded-2xl border text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95 ${
+                userData.isBanned
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                  : 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20'
+              }`}
+            >
+              {userData.isBanned ? <Shield size={16} /> : <ShieldAlert size={16} />}
+              {userData.isBanned ? 'Unban Player' : 'Ban Player'}
+            </button>
+
+            {/* Action 2: Make Host / Remove Host */}
+            {hostAssignment ? (
+              <button
+                onClick={() => setIsRemoveConfirmOpen(true)}
+                disabled={isHostActionLoading}
+                className="py-3.5 px-4 rounded-2xl border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+              >
+                <X size={16} />
+                Remove Host
+              </button>
+            ) : (
+              <button
+                onClick={() => setIsAssignModalOpen(true)}
+                disabled={isHostActionLoading || userData.isBanned}
+                title={userData.isBanned ? 'Cannot make a banned player a host' : 'Assign match to host'}
+                className="py-3.5 px-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-emerald-500/5"
+              >
+                <Gamepad2 size={16} />
+                Make Host
+              </button>
+            )}
+          </div>
+
+          {/* Hosting Status & Assigned Match Details */}
+          <div className="bg-black/50 border border-neutral-800 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[9px] font-black uppercase tracking-widest text-neutral-400">Hosting Status</span>
+              {hostAssignment ? (
+                <span className="px-2.5 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[9px] font-black uppercase tracking-wider flex items-center gap-1">
+                  <CheckCircle2 size={10} /> Active Host
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 bg-neutral-800 text-neutral-400 rounded-full text-[9px] font-black uppercase tracking-wider">
+                  Standard Player
+                </span>
+              )}
+            </div>
+
+            {hostAssignment ? (
+              <div className="space-y-1.5 pt-2 border-t border-neutral-800/80">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-neutral-400">Assigned Match:</span>
+                  <span className="font-black text-white italic">{hostAssignment.matchTitle || hostAssignment.matchId}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs font-mono">
+                  <span className="text-neutral-400">Match ID:</span>
+                  <span className="text-emerald-400 font-bold">{hostAssignment.matchId}</span>
+                </div>
+                {hostAssignment.assignedByAdminEmail && (
+                  <div className="flex justify-between items-center text-[10px]">
+                    <span className="text-neutral-500">Assigned By:</span>
+                    <span className="text-neutral-300">{hostAssignment.assignedByAdminEmail}</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-[11px] text-neutral-500 mt-1">
+                This player does not currently have any active match hosting assignments.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -399,6 +643,170 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
           </motion.div>
         </div>
       )}
+
+      {/* TASK 2: MAKE HOST ASSIGNMENT MODAL */}
+      <AnimatePresence>
+        {isAssignModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isHostActionLoading && setIsAssignModalOpen(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-7 shadow-2xl z-10"
+            >
+              <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mb-5">
+                <Gamepad2 size={28} />
+              </div>
+
+              <h2 className="text-xl font-black text-white italic mb-1">Make Match Host</h2>
+              <p className="text-xs text-neutral-400 mb-6">
+                Assign <span className="text-emerald-400 font-bold">{userData.username}</span> (ID: <span className="font-mono text-neutral-300">{userId}</span>) to manage an official match.
+              </p>
+
+              {availableMatches.length === 0 ? (
+                <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6 text-center mb-6">
+                  <Swords size={28} className="text-neutral-600 mx-auto mb-2" />
+                  <p className="text-xs text-neutral-400">No active or upcoming matches available for host assignment.</p>
+                </div>
+              ) : (
+                <div className="space-y-4 mb-6">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 mb-2">
+                      Select Eligible Tournament Match
+                    </label>
+                    <select
+                      value={selectedMatchId}
+                      onChange={(e) => setSelectedMatchId(e.target.value)}
+                      className="w-full bg-neutral-950 border border-neutral-800 rounded-2xl px-4 py-3.5 text-xs text-white font-medium focus:outline-none focus:border-emerald-500"
+                    >
+                      {availableMatches.map((m) => (
+                        <option key={m.id} value={m.id} className="bg-neutral-900 text-white">
+                          {m.title} ({m.section || m.mode || 'BR'} - ₹{m.entryFee})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Selected Match Details Preview */}
+                  {(() => {
+                    const sel = availableMatches.find(m => m.id === selectedMatchId);
+                    if (!sel) return null;
+                    return (
+                      <div className="bg-neutral-950/80 border border-neutral-800 rounded-2xl p-4 text-xs space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-neutral-500">Match Name:</span>
+                          <span className="text-white font-black italic">{sel.title}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-neutral-500">Game Mode:</span>
+                          <span className="text-emerald-400 uppercase font-black text-[10px]">{sel.section || sel.mode}</span>
+                        </div>
+                        <div className="flex justify-between items-center font-mono text-[11px]">
+                          <span className="text-neutral-500">Match ID:</span>
+                          <span className="text-neutral-300">{sel.id}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-neutral-500">Scheduled Time:</span>
+                          <span className="text-white">{sel.time}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-neutral-500">Current Status:</span>
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            {sel.status || 'Active'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAssignModalOpen(false)}
+                  disabled={isHostActionLoading}
+                  className="flex-1 py-3.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-black uppercase tracking-wider rounded-2xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAssignHost}
+                  disabled={availableMatches.length === 0 || isHostActionLoading}
+                  className="flex-1 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isHostActionLoading ? (
+                    <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    'Confirm Assignment'
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* TASK 6: REMOVE HOST CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {isRemoveConfirmOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isHostActionLoading && setIsRemoveConfirmOpen(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-sm bg-neutral-900 border border-neutral-800 rounded-[2.5rem] p-7 shadow-2xl z-10 text-center"
+            >
+              <div className="w-14 h-14 bg-red-500/10 border border-red-500/20 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <ShieldAlert size={28} />
+              </div>
+
+              <h2 className="text-xl font-black text-white italic mb-2">Revoke Host Privileges?</h2>
+              <p className="text-xs text-neutral-400 mb-6 leading-relaxed">
+                Are you sure you want to remove host status from <span className="text-white font-bold">{userData.username}</span> for match <span className="text-emerald-400 font-bold">"{hostAssignment?.matchTitle || hostAssignment?.matchId}"</span>? They will immediately lose room management access.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsRemoveConfirmOpen(false)}
+                  disabled={isHostActionLoading}
+                  className="flex-1 py-3.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-black uppercase tracking-wider rounded-2xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemoveHost}
+                  disabled={isHostActionLoading}
+                  className="flex-1 py-3.5 bg-red-600 hover:bg-red-500 text-white text-xs font-black uppercase tracking-wider rounded-2xl shadow-lg shadow-red-600/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isHostActionLoading ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    'Confirm & Revoke'
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

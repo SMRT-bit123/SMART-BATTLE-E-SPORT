@@ -328,6 +328,34 @@ export default function ProfilePage({ user, onPageChange, onLogout }: ProfilePag
             <ChevronRight size={18} className="text-slate-700 group-hover:translate-x-0.5 transition-transform" />
           </button>
 
+          {/* Card: Host Dashboard (if player is a host) */}
+          {(user?.isHost || Boolean(user?.hostId)) && (
+            <button
+              onClick={() => onPageChange(Page.HOST_DASHBOARD)}
+              className="w-full bg-emerald-50 hover:bg-emerald-100/90 active:bg-emerald-200/90 rounded-xl sm:rounded-2xl px-4 py-3.5 flex items-center justify-between border border-emerald-300 shadow-xs group transition-all"
+            >
+              <div className="flex items-center gap-3.5">
+                <div className="text-emerald-600">
+                  <Gamepad2 size={20} className="stroke-[2.2]" />
+                </div>
+                <div className="text-left">
+                  <span className="text-sm font-bold text-emerald-950 tracking-tight block">
+                    Host Control Room
+                  </span>
+                  <span className="text-[10px] font-semibold text-emerald-750 block">
+                    Manage Match, Room & Declare Results
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 bg-emerald-600 text-white text-[9px] font-black uppercase rounded-full tracking-wider">
+                  Host
+                </span>
+                <ChevronRight size={18} className="text-emerald-700 group-hover:translate-x-0.5 transition-transform" />
+              </div>
+            </button>
+          )}
+
           {/* Card 10: Admin Panel (if admin) */}
           {isAdminUser && (
             <button

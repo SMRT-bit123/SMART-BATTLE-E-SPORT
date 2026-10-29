@@ -202,6 +202,18 @@
     "/appSettings/{settingId}": {
       "schema": "AppSettings",
       "description": "Global application configuration"
+    },
+    "/hosts/{hostId}": {
+      "schema": "HostAssignment",
+      "description": "Match-specific host role assignments"
+    },
+    "/pendingResults/{matchId}": {
+      "schema": "PendingResult",
+      "description": "Match results declared by hosts awaiting admin approval"
+    },
+    "/hostLogs/{logId}": {
+      "schema": "HostLog",
+      "description": "Audit trail for host actions"
     }
   }
 }

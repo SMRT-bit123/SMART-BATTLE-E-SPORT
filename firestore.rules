@@ -175,6 +175,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Pending Results: Host result declarations awaiting admin approval
+    match /pendingResults/{matchId} {
+      allow read, list, get: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // Payment Settings: Gateway configurations
     match /paymentSettings/{gatewayId} {
       allow read, get, list: if true;

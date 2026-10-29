@@ -150,6 +150,49 @@ export interface HostAccount {
   updatedAt?: any;
 }
 
+export interface HostAssignment {
+  id?: string;
+  hostUserId: string;
+  hostEmail: string;
+  hostName: string;
+  matchId: string;
+  matchTitle?: string;
+  matchCategory?: string;
+  assignedByAdminId: string;
+  assignedByAdminEmail?: string;
+  assignedAt: any;
+  assignmentStatus: 'active' | 'removed';
+  removedAt?: any;
+  removedByAdminId?: string;
+  removedByAdminEmail?: string;
+}
+
+export interface MatchParticipantResult {
+  userId: string;
+  username: string;
+  ign?: string;
+  slot?: number;
+  rank: number;
+  kills: number;
+  winnings: number;
+}
+
+export interface MatchResultSubmission {
+  id?: string;
+  matchId: string;
+  matchTitle: string;
+  submittedByHostId: string;
+  submittedByHostEmail: string;
+  submittedByHostName?: string;
+  submittedAt: any;
+  status: 'pending_review' | 'approved' | 'rejected';
+  results: MatchParticipantResult[];
+  proofScreenshotUrl?: string;
+  reviewedByAdminId?: string;
+  reviewedAt?: any;
+  rejectionReason?: string;
+}
+
 export interface HostLog {
   id?: string;
   hostId: string;
@@ -157,7 +200,7 @@ export interface HostLog {
   hostName: string;
   matchId: string;
   matchTitle: string;
-  action: 'updated_room_credentials' | 'updated_status' | 'viewed_participants';
+  action: 'assigned_as_host' | 'removed_from_host' | 'updated_room_credentials' | 'updated_status' | 'viewed_participants' | 'submitted_match_result' | 'match_result_approved' | 'match_result_rejected';
   details?: any;
   timestamp: any;
 }

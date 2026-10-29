@@ -7,9 +7,10 @@ import {
   CheckCircle2, AlertCircle, Loader2, Save, RefreshCw,
   Edit2, Copy, Upload, Gamepad2, Key, Check, CheckCheck,
   ListChecks, FileText, Sparkles, PlusCircle, RotateCcw,
-  Filter, ChevronUp, ChevronDown, Send, Bell
+  Filter, ChevronUp, ChevronDown, Send, Bell, Award, History,
+  UserMinus, ChevronRight, Phone
 } from 'lucide-react';
-import { Page, User, Tournament, Banner, PaymentGateway } from '../types';
+import { Page, User, Tournament, Banner, PaymentGateway, HostAssignment, MatchResultSubmission } from '../types';
 import { db, auth, storage, handleFirestoreError, OperationType } from '../lib/firebase';
 import { formatMatchTime } from '../utils/dateUtils';
 import SafeImage from '../components/SafeImage';
@@ -19,7 +20,7 @@ import AdminNotificationsTab from '../components/AdminNotificationsTab';
 import { 
   collection, doc, onSnapshot, updateDoc, deleteDoc,
   addDoc, serverTimestamp, runTransaction, writeBatch,
-  query, where, orderBy, getDocs, increment, setDoc
+  query, where, orderBy, getDocs, increment, setDoc, limit
 } from 'firebase/firestore';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { useModalBackHandler } from '../hooks/useModalBackHandler';
@@ -33,6 +34,7 @@ enum AdminTab {
   NOTIFICATIONS = 'notifications',
   USERS = 'users',
   MATCHES = 'matches',
+  HOST_RESULTS = 'host_results',
   TRANSACTIONS = 'transactions',
   RULES = 'rules',
   REFERRAL = 'referral',
@@ -174,6 +176,15 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
   const [playerPositionResults, setPlayerPositionResults] = useState<Record<string, number>>({}); // userId -> rank (for PER KILL matches)
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+
+  // Host Management & Result Verification States
+  const [pendingHostResults, setPendingHostResults] = useState<any[]>([]);
+  const [hostLogsList, setHostLogsList] = useState<any[]>([]);
+  const [hostsMap, setHostsMap] = useState<Record<string, HostAssignment>>({});
+  const [selectedUserHost, setSelectedUserHost] = useState<HostAssignment | null>(null);
+  const [isHostAssignModalOpen, setIsHostAssignModalOpen] = useState(false);
+  const [assignMatchId, setAssignMatchId] = useState('');
+  const [isHostActionLoading, setIsHostActionLoading] = useState(false);
 
   // Dynamic Rules State for All Game Mode Sections
   const [gameRulesDocs, setGameRulesDocs] = useState<Record<string, { id: string; title: string; category?: string; section?: string; rules: string[]; updatedAt?: any }>>({});
@@ -348,6 +359,22 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
       setPaymentGateways(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as PaymentGateway)));
     }, (err) => handleFirestoreError(err, OperationType.LIST, 'paymentSettings'));
 
+    const unsubPendingResults = onSnapshot(collection(db, 'pendingResults'), (snapshot) => {
+      setPendingHostResults(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter((x: any) => x.status === 'pending_review'));
+    }, (err) => console.warn('pendingResults error:', err));
+
+    const unsubHostLogs = onSnapshot(query(collection(db, 'hostLogs'), orderBy('timestamp', 'desc'), limit(50)), (snapshot) => {
+      setHostLogsList(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => console.warn('hostLogs error:', err));
+
+    const unsubHosts = onSnapshot(collection(db, 'hosts'), (snapshot) => {
+      const map: Record<string, HostAssignment> = {};
+      snapshot.docs.forEach(docSnap => {
+        map[docSnap.id] = { id: docSnap.id, ...docSnap.data() } as HostAssignment;
+      });
+      setHostsMap(map);
+    }, (err) => console.warn('hosts collection error:', err));
+
     setLoading(false);
     return () => {
       unsubUsers();
@@ -358,6 +385,9 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
       unsubSettings();
       unsubBanners();
       unsubGateways();
+      unsubPendingResults();
+      unsubHostLogs();
+      unsubHosts();
     };
   }, [onPageChange]);
 
@@ -533,6 +563,110 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
     }
   };
 
+  // Selected user host assignment listener
+  useEffect(() => {
+    if (!selectedUser?.id) {
+      setSelectedUserHost(null);
+      return;
+    }
+    const unsub = onSnapshot(doc(db, 'hosts', selectedUser.id), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().assignmentStatus === 'active') {
+        setSelectedUserHost({ id: docSnap.id, ...docSnap.data() } as HostAssignment);
+      } else {
+        setSelectedUserHost(null);
+      }
+    });
+    return () => unsub();
+  }, [selectedUser?.id]);
+
+  const handleAssignHostFromAdmin = async (targetUserId: string, matchId: string) => {
+    if (!targetUserId || !matchId) return;
+    setIsHostActionLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/admin/assign-host', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ hostUserId: targetUserId, matchId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(data.message || 'Player assigned as match host!');
+        setIsHostAssignModalOpen(false);
+      } else {
+        alert(data.error || 'Failed to assign host');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Network error');
+    } finally {
+      setIsHostActionLoading(false);
+    }
+  };
+
+  const handleRemoveHostFromAdmin = async (targetUserId: string, matchId?: string) => {
+    if (!confirm('Are you sure you want to revoke host permissions for this player?')) return;
+    setIsHostActionLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/admin/remove-host', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ hostUserId: targetUserId, matchId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert('Host role revoked successfully.');
+      } else {
+        alert(data.error || 'Failed to revoke host');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Network error');
+    } finally {
+      setIsHostActionLoading(false);
+    }
+  };
+
+  const handleReviewHostResult = async (matchId: string, approved: boolean) => {
+    let rejectionReason = '';
+    if (!approved) {
+      const reason = window.prompt("Enter rejection reason (the host will be notified to revise):", "Incorrect kill stats or positions");
+      if (reason === null) return;
+      rejectionReason = reason;
+    } else {
+      if (!confirm("Approve this score sheet? Winning prize coins will be automatically distributed to players' wallets and the match marked Completed.")) {
+        return;
+      }
+    }
+
+    setIsProcessing(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/admin/review-result', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ matchId, approved, rejectionReason })
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(data.message || (approved ? 'Results approved and wallets credited!' : 'Submission rejected.'));
+      } else {
+        alert(data.error || 'Review failed');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Network error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const processDeleteMatch = async () => {
     const { matchId } = isDeleteConfirmOpen;
@@ -1318,43 +1452,241 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
               exit={{ opacity: 0, y: -20 }}
               className="space-y-6"
             >
-              <div className="relative">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500" size={16} />
-                <input 
-                  type="text"
-                  placeholder="Search by username..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full bg-neutral-900 border border-neutral-800 rounded-2xl py-4 pl-12 pr-4 text-xs font-bold outline-none focus:border-purple-500 transition-all"
-                />
+              <div className="space-y-3">
+                <div className="relative">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500" size={16} />
+                  <input 
+                    type="text"
+                    placeholder="Search by username, email, phone, or player ID..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full bg-neutral-900 border border-neutral-800 rounded-2xl py-4 pl-12 pr-4 text-xs font-bold outline-none focus:border-purple-500 transition-all text-white placeholder:text-neutral-600"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between px-1 text-[9px] font-black uppercase tracking-wider text-neutral-500">
+                  <span>Registered Players ({users.length})</span>
+                  <span>Active Hosts: {Object.values(hostsMap).filter((h: any) => h?.assignmentStatus === 'active').length}</span>
+                </div>
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {users
-                  .filter(u => u.username.toLowerCase().includes(searchTerm.toLowerCase()))
-                  .map((u) => (
-                  <div 
-                    key={u.id}
-                    onClick={() => onPageChange(Page.ADMIN_USER_PROFILE, u.id)}
-                    className="p-4 bg-neutral-900 border border-neutral-800 rounded-2xl flex items-center justify-between group cursor-pointer hover:border-primary transition-all"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-black flex items-center justify-center text-neutral-700 border border-white/5">
-                        <Users size={20} />
+                  .filter(u => {
+                    const term = searchTerm.toLowerCase().trim();
+                    if (!term) return true;
+                    return (
+                      (u.username || '').toLowerCase().includes(term) ||
+                      (u.email || '').toLowerCase().includes(term) ||
+                      (u.phone || '').toLowerCase().includes(term) ||
+                      (u.id || '').toLowerCase().includes(term)
+                    );
+                  })
+                  .map((u) => {
+                    const hostAssignment = hostsMap[u.id];
+                    const isActiveHost = Boolean(
+                      (hostAssignment && hostAssignment.assignmentStatus === 'active') || 
+                      (u.isHost && u.hostMatchId)
+                    );
+                    const assignedMatchId = hostAssignment?.matchId || u.hostMatchId;
+                    const assignedMatch = assignedMatchId ? matches.find(m => m.id === assignedMatchId) : null;
+                    const assignedMatchTitle = hostAssignment?.matchTitle || u.hostMatchTitle || assignedMatch?.title || 'Assigned Match';
+                    const totalWallet = (u.wallet?.deposit || 0) + (u.wallet?.winnings || 0) + (u.wallet?.bonus || 0);
+
+                    return (
+                      <div 
+                        key={u.id}
+                        className={`p-4 rounded-2xl border transition-all ${
+                          isActiveHost 
+                            ? 'bg-neutral-900/95 border-emerald-500/30 shadow-lg shadow-emerald-500/5' 
+                            : u.isBanned
+                            ? 'bg-neutral-900/90 border-red-500/30'
+                            : 'bg-neutral-900 border-neutral-800'
+                        }`}
+                      >
+                        {/* Top: User Profile & Wallet Details */}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3 min-w-0">
+                            <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-black text-sm shrink-0 border ${
+                              isActiveHost 
+                                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                                : u.isBanned
+                                ? 'bg-red-500/10 text-red-400 border-red-500/30'
+                                : 'bg-black text-neutral-300 border-white/5'
+                            }`}>
+                              {u.username ? u.username.charAt(0).toUpperCase() : <Users size={18} />}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h4 className="text-xs font-black italic text-white truncate">{u.username}</h4>
+                                {isActiveHost && (
+                                  <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                    Host
+                                  </span>
+                                )}
+                                {u.isBanned && (
+                                  <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30">
+                                    Banned
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[8px] font-black uppercase tracking-widest text-neutral-500 truncate mt-0.5">{u.email}</p>
+                              <div className="flex items-center gap-2 mt-1 text-[8px] font-mono text-neutral-400 flex-wrap">
+                                <span className="text-neutral-500">ID:</span>
+                                <span className="text-neutral-300 font-bold">{u.id.slice(0, 10)}...</span>
+                                {u.phone && (
+                                  <>
+                                    <span className="text-neutral-600">•</span>
+                                    <span className="text-neutral-400 flex items-center gap-1">
+                                      <Phone size={9} /> {u.phone}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <p className="text-[8px] font-black uppercase tracking-widest text-neutral-500">Wallet</p>
+                            <p className="text-xs font-black text-emerald-400 italic">₹{totalWallet}</p>
+                          </div>
+                        </div>
+
+                        {/* Middle: Match Hosting Status Card */}
+                        <div className={`mt-3 p-2.5 rounded-xl border text-[9px] ${
+                          isActiveHost 
+                            ? 'bg-emerald-950/20 border-emerald-500/20 text-emerald-300' 
+                            : 'bg-black/50 border-neutral-800/80 text-neutral-400'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-black uppercase tracking-wider flex items-center gap-1.5">
+                              {isActiveHost ? (
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                  Active Match Host
+                                </>
+                              ) : (
+                                <>
+                                  <span className="w-1.5 h-1.5 rounded-full bg-neutral-600" />
+                                  Standard Player (Not Hosting)
+                                </>
+                              )}
+                            </span>
+                            {isActiveHost && (
+                              <span className="text-[8px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                                ID: {assignedMatchId?.slice(0, 8)}...
+                              </span>
+                            )}
+                          </div>
+                          {isActiveHost && (
+                            <div className="mt-1.5 pt-1.5 border-t border-emerald-500/10 flex items-center justify-between text-[8px] text-neutral-300">
+                              <span className="font-bold text-white truncate max-w-[220px]">
+                                {assignedMatchTitle}
+                              </span>
+                              <span className="text-neutral-400 uppercase">
+                                {assignedMatch?.section || assignedMatch?.mode || 'Tournament'}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Bottom: MANDATORY ADMINISTRATIVE ACTION BUTTONS DIRECTLY UNDER USER */}
+                        <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-neutral-800/80">
+                          {/* 1. Ban Player / Unban Player */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleBanUser(u.id, u.isBanned || false);
+                            }}
+                            className={`py-2.5 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 border ${
+                              u.isBanned
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                                : 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20'
+                            }`}
+                          >
+                            {u.isBanned ? <Unlock size={13} /> : <Ban size={13} />}
+                            <span>{u.isBanned ? 'Unban Player' : 'Ban Player'}</span>
+                          </button>
+
+                          {/* 2. Make Host / Remove Host */}
+                          {isActiveHost ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                handleRemoveHostFromAdmin(u.id, assignedMatchId);
+                              }}
+                              disabled={isHostActionLoading}
+                              className="py-2.5 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 border bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20 disabled:opacity-50"
+                            >
+                              {isHostActionLoading ? <Loader2 size={13} className="animate-spin" /> : <UserMinus size={13} />}
+                              <span>Remove Host</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (u.isBanned) {
+                                  alert('Cannot make a banned player a host. Please unban player first.');
+                                  return;
+                                }
+                                setSelectedUser(u);
+                                const activeMatches = matches.filter(m => m.status !== 'completed');
+                                if (activeMatches.length > 0) {
+                                  setAssignMatchId(activeMatches[0].id);
+                                }
+                                setIsHostAssignModalOpen(true);
+                              }}
+                              disabled={u.isBanned || isHostActionLoading}
+                              title={u.isBanned ? 'Cannot make a banned player a host' : 'Assign eligible match to player'}
+                              className="py-2.5 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all active:scale-95 border bg-purple-600/15 border-purple-500/30 text-purple-300 hover:bg-purple-600/30 hover:text-white disabled:opacity-40"
+                            >
+                              <Gamepad2 size={13} />
+                              <span>Make Host</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Player Profile Navigation Link */}
+                        <div className="mt-2.5 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              onPageChange(Page.ADMIN_USER_PROFILE, u.id);
+                            }}
+                            className="text-[8px] font-black uppercase tracking-widest text-neutral-500 hover:text-neutral-300 flex items-center gap-1 py-1 px-2 rounded-lg hover:bg-neutral-800 transition-colors"
+                          >
+                            <span>Full Profile & History</span>
+                            <ChevronRight size={11} />
+                          </button>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="text-xs font-black italic">{u.username}</h4>
-                        <p className="text-[8px] font-black uppercase tracking-widest text-neutral-600">{u.email}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-black text-emerald-400 italic">
-                        ₹{(u.wallet?.deposit || 0) + (u.wallet?.winnings || 0) + (u.wallet?.bonus || 0)}
-                      </span>
-                      {u.isBanned && <Ban size={14} className="text-red-500" />}
-                    </div>
+                    );
+                  })}
+
+                {users.filter(u => {
+                  const term = searchTerm.toLowerCase().trim();
+                  if (!term) return true;
+                  return (
+                    (u.username || '').toLowerCase().includes(term) ||
+                    (u.email || '').toLowerCase().includes(term) ||
+                    (u.phone || '').toLowerCase().includes(term) ||
+                    (u.id || '').toLowerCase().includes(term)
+                  );
+                }).length === 0 && (
+                  <div className="p-8 text-center bg-neutral-900 border border-neutral-800 rounded-2xl">
+                    <Users size={28} className="mx-auto text-neutral-600 mb-2" />
+                    <p className="text-xs font-bold text-neutral-400">No players found</p>
+                    <p className="text-[9px] text-neutral-600 mt-1 uppercase tracking-wider">Try searching with a different username, email or ID</p>
                   </div>
-                ))}
+                )}
               </div>
             </motion.div>
           )}
@@ -1657,6 +1989,168 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
                       </div>
                     );
                   })}
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === AdminTab.HOST_RESULTS && (
+            <motion.div
+              key="host_results"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="space-y-6"
+            >
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wide text-white flex items-center gap-2">
+                    <Award size={16} className="text-emerald-400" />
+                    <span>Host Result Declarations</span>
+                  </h3>
+                  <p className="text-[10px] text-neutral-400">
+                    Review and verify scorecards submitted by match hosts before prize coins are credited
+                  </p>
+                </div>
+                {pendingHostResults.length > 0 && (
+                  <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-black uppercase tracking-wider animate-pulse self-start sm:self-auto">
+                    {pendingHostResults.length} Submissions Pending Review
+                  </span>
+                )}
+              </div>
+
+              {/* Pending Submissions List */}
+              <div className="space-y-4">
+                {pendingHostResults.length === 0 ? (
+                  <div className="p-8 bg-neutral-900/60 border border-neutral-800 rounded-3xl text-center space-y-2">
+                    <CheckCircle2 size={32} className="mx-auto text-emerald-500/60" />
+                    <h4 className="text-sm font-black italic text-white">All Clear! No Pending Declarations</h4>
+                    <p className="text-xs text-neutral-500 max-w-sm mx-auto">
+                      All host declarations have been verified. Any new result submissions from tournament hosts will appear here for verification.
+                    </p>
+                  </div>
+                ) : (
+                  pendingHostResults.map((sub: any) => (
+                    <div
+                      key={sub.matchId}
+                      className="bg-neutral-900 border border-neutral-800 rounded-3xl p-5 shadow-xl space-y-4"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-neutral-800">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-full text-[9px] font-black uppercase tracking-wider">
+                              {sub.matchCategory || 'Match'}
+                            </span>
+                            <span className="text-[10px] font-mono text-neutral-500">ID: {sub.matchId}</span>
+                          </div>
+                          <h4 className="text-base font-black italic text-white mt-1">{sub.matchTitle}</h4>
+                          <p className="text-[10px] text-neutral-400 mt-0.5">
+                            Submitted by host: <span className="text-emerald-400 font-semibold">{sub.submittedByHostEmail || sub.submittedByHostId}</span>
+                          </p>
+                        </div>
+                        {sub.proofScreenshotUrl && (
+                          <a
+                            href={sub.proofScreenshotUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-3 py-1.5 bg-neutral-950 border border-neutral-800 hover:border-emerald-500 rounded-xl text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5 transition-colors self-start sm:self-auto"
+                          >
+                            <Upload size={12} />
+                            View Proof Screenshot
+                          </a>
+                        )}
+                      </div>
+
+                      {/* Participant Results Table */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-neutral-800/80 text-[9px] font-black uppercase tracking-widest text-neutral-500">
+                              <th className="py-2 px-2">Rank</th>
+                              <th className="py-2 px-2">Player</th>
+                              <th className="py-2 px-2">In-Game Name (IGN)</th>
+                              <th className="py-2 px-2 text-center">Kills</th>
+                              <th className="py-2 px-2 text-right">Prize (₹)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-neutral-800/40 font-medium">
+                            {(sub.results || []).map((r: any, idx: number) => (
+                              <tr key={r.userId || idx} className="hover:bg-white/5 transition-colors">
+                                <td className="py-2 px-2 font-black text-amber-400">#{r.rank || idx + 1}</td>
+                                <td className="py-2 px-2 font-bold text-white">{r.username}</td>
+                                <td className="py-2 px-2 text-neutral-400 font-mono text-[11px]">{r.ign || 'N/A'}</td>
+                                <td className="py-2 px-2 text-center font-black text-white">{r.kills || 0}</td>
+                                <td className="py-2 px-2 text-right font-black text-emerald-400">
+                                  ₹{Number(r.winnings || 0).toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Review Action Buttons */}
+                      <div className="flex gap-3 pt-2 border-t border-neutral-800">
+                        <button
+                          type="button"
+                          onClick={() => handleReviewHostResult(sub.matchId, false)}
+                          disabled={isProcessing}
+                          className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl text-xs font-black uppercase tracking-wider transition-all disabled:opacity-50"
+                        >
+                          Reject Submission
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReviewHostResult(sub.matchId, true)}
+                          disabled={isProcessing}
+                          className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black font-black uppercase tracking-wider text-xs rounded-xl shadow-lg shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                        >
+                          <CheckCircle2 size={16} />
+                          Approve & Credit Wallets
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Host System Audit Trail */}
+              <div className="mt-8 pt-6 border-t border-neutral-800">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-xs font-black uppercase tracking-widest text-neutral-400 flex items-center gap-2">
+                    <History size={14} />
+                    Host Actions Audit Trail (hostLogs)
+                  </h4>
+                  <span className="text-[10px] text-neutral-500 font-mono">Immutable</span>
+                </div>
+
+                <div className="space-y-2">
+                  {hostLogsList.length === 0 ? (
+                    <p className="text-xs text-neutral-500 text-center py-4">No audit logs recorded yet.</p>
+                  ) : (
+                    hostLogsList.slice(0, 15).map((log: any) => (
+                      <div
+                        key={log.id}
+                        className="bg-black/60 border border-neutral-800/80 rounded-2xl p-3 flex items-center justify-between text-xs"
+                      >
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase bg-neutral-800 text-neutral-300">
+                              {log.action?.replace(/_/g, ' ')}
+                            </span>
+                            <span className="font-bold text-white italic">{log.matchTitle || log.matchId}</span>
+                          </div>
+                          <p className="text-[10px] text-neutral-500 font-mono">
+                            Host: {log.hostEmail || log.hostId}
+                          </p>
+                        </div>
+                        <span className="text-[9px] text-neutral-500 font-mono">
+                          {log.timestamp?.toDate ? log.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recent'}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </motion.div>
           )}
@@ -2605,6 +3099,69 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
                   </button>
                 </div>
 
+                {/* Host Assignment Section */}
+                <div className="p-4 bg-black rounded-2xl border border-neutral-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-black italic mb-0.5">Match Host Status</h4>
+                      <p className="text-[8px] font-black uppercase tracking-widest text-neutral-500">
+                        {selectedUserHost ? `Active Host • ${selectedUserHost.matchTitle || selectedUserHost.matchId}` : 'No Match Assigned'}
+                      </p>
+                    </div>
+                    {selectedUserHost ? (
+                      <button 
+                        onClick={() => handleRemoveHostFromAdmin(selectedUser.id!, selectedUserHost.matchId)}
+                        disabled={isHostActionLoading}
+                        className="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 border bg-red-500/10 border-red-500 text-red-500 hover:bg-red-500/20 transition-all active:scale-95 disabled:opacity-50"
+                      >
+                        <Minus size={14} />
+                        Remove Host
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => {
+                          const activeMatches = matches.filter(m => m.status !== 'completed');
+                          if (activeMatches.length > 0) {
+                            setAssignMatchId(activeMatches[0].id);
+                          }
+                          setIsHostAssignModalOpen(true);
+                        }}
+                        disabled={selectedUser.isBanned || isHostActionLoading}
+                        title={selectedUser.isBanned ? 'Cannot make a banned player a host' : 'Assign match to host'}
+                        className="px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 border bg-emerald-500/10 border-emerald-500 text-emerald-500 hover:bg-emerald-500/20 transition-all active:scale-95 disabled:opacity-40"
+                      >
+                        <Gamepad2 size={14} />
+                        Make Host
+                      </button>
+                    )}
+                  </div>
+                  {selectedUserHost && (
+                    <div className="p-2.5 bg-neutral-900 rounded-xl text-[10px] font-mono text-neutral-300 flex justify-between items-center">
+                      <span className="text-neutral-500">Match ID:</span>
+                      <span className="text-emerald-400 font-bold">{selectedUserHost.matchId}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between p-4 bg-black rounded-2xl border border-neutral-800">
+                  <div>
+                    <h4 className="text-xs font-black italic mb-0.5">Player Profile Page</h4>
+                    <p className="text-[8px] font-black uppercase tracking-widest text-neutral-500">
+                      Open Dedicated Player Panel
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const uId = selectedUser.id;
+                      setSelectedUser(null);
+                      onPageChange(Page.ADMIN_USER_PROFILE, uId);
+                    }}
+                    className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95"
+                  >
+                    Open Profile
+                  </button>
+                </div>
+
                 <div className="flex items-center justify-between p-4 bg-black rounded-2xl border border-neutral-800">
                   <div>
                     <h4 className="text-xs font-black italic mb-1">Password Management</h4>
@@ -2627,6 +3184,109 @@ export default function AdminPage({ onPageChange }: AdminPageProps) {
                       <DetailRow label="Wallet" value={`₹${(selectedUser.wallet?.deposit || 0) + (selectedUser.wallet?.winnings || 0) + (selectedUser.wallet?.bonus || 0)}`} />
                    </div>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Make Host Dialog in Admin */}
+      <AnimatePresence>
+        {isHostAssignModalOpen && selectedUser && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[70] flex items-center justify-center p-5">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="w-full max-w-sm bg-neutral-900 rounded-[2.5rem] p-7 border border-neutral-800 shadow-2xl"
+            >
+              <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <Gamepad2 size={28} />
+              </div>
+
+              <h3 className="text-lg font-black italic text-center mb-1">Make Match Host</h3>
+              <p className="text-xs text-neutral-400 text-center mb-6">
+                Assign <span className="text-emerald-400 font-bold">{selectedUser.username}</span> to manage an active match.
+              </p>
+
+              {matches.filter(m => m.status !== 'completed').length === 0 ? (
+                <p className="text-xs text-neutral-500 text-center mb-6">No active matches available to assign.</p>
+              ) : (
+                <div className="space-y-4 mb-6">
+                  <div>
+                    <label className="block text-[9px] font-black uppercase tracking-wider text-neutral-400 mb-2">
+                      Select Match
+                    </label>
+                    <select
+                      value={assignMatchId}
+                      onChange={(e) => setAssignMatchId(e.target.value)}
+                      className="w-full bg-black border border-neutral-800 rounded-xl px-3.5 py-3 text-xs text-white outline-none focus:border-emerald-500"
+                    >
+                      {matches.filter(m => m.status !== 'completed').map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.title} ({m.section || m.mode} - ₹{m.entryFee})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Selected Match Details Preview */}
+                  {(() => {
+                    const sel = matches.find(m => m.id === assignMatchId);
+                    if (!sel) return null;
+                    return (
+                      <div className="p-3 bg-black rounded-xl border border-neutral-800/80 text-[10px] space-y-1.5">
+                        <div className="flex justify-between items-center text-neutral-400">
+                          <span>Game Mode:</span>
+                          <span className="font-bold text-white">{sel.section || sel.mode || 'Battle Royale'}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-neutral-400">
+                          <span>Map:</span>
+                          <span className="font-bold text-white">{sel.map || 'Bermuda'}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-neutral-400">
+                          <span>Entry Fee / Prize:</span>
+                          <span className="font-bold text-emerald-400">₹{sel.entryFee} / ₹{sel.prizePool}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-neutral-400">
+                          <span>Match ID:</span>
+                          <span className="font-mono text-purple-400 font-bold">{sel.id}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-neutral-400">
+                          <span>Status:</span>
+                          <span className="font-bold uppercase text-amber-400">{sel.status}</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <p className="text-[9px] text-neutral-500 italic text-center">
+                    The host will be authorized to manage Room ID/Password and submit verified kill results for this match only.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsHostAssignModalOpen(false)}
+                  disabled={isHostActionLoading}
+                  className="flex-1 py-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-xl text-xs font-black uppercase tracking-wider transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAssignHostFromAdmin(selectedUser.id!, assignMatchId)}
+                  disabled={!assignMatchId || isHostActionLoading}
+                  className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-50 transition-all active:scale-95 font-bold shadow-lg shadow-emerald-500/20"
+                >
+                  {isHostActionLoading ? (
+                    <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    'Confirm Assignment'
+                  )}
+                </button>
               </div>
             </motion.div>
           </div>

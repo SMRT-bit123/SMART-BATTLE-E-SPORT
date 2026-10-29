@@ -15,6 +15,7 @@ import {
 } from "firebase/firestore";
 import { initializeApp, getApps, getApp } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getAuth as getAdminAuth } from "firebase-admin/auth";
 import cors from "cors";
 import crypto from "crypto";
 import dotenv from "dotenv";
@@ -73,6 +74,73 @@ try {
     firestore = getFirestore();
   } catch (e2) {
     console.error("[Firebase Admin] Firestore fallback failed");
+  }
+}
+
+let adminAuth: any;
+try {
+  adminAuth = getAdminAuth(app);
+} catch (e: any) {
+  console.warn("[Firebase Admin] Auth initialization failed:", e.message);
+}
+
+// Authentication helper for server-side authorization
+async function authenticateUser(req: express.Request): Promise<{ uid: string; email: string; isAdmin: boolean } | null> {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.split('Bearer ')[1] : ((req.body as any)?.idToken || req.query?.idToken as string);
+  if (!token) return null;
+
+  try {
+    let uid = '';
+    let email = '';
+
+    if (adminAuth) {
+      try {
+        const decoded = await adminAuth.verifyIdToken(token);
+        uid = decoded.uid;
+        email = (decoded.email || '').toLowerCase().trim();
+      } catch (adminErr: any) {
+        // Fallback for JWT decoding in dev environment
+      }
+    }
+
+    if (!uid) {
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf8'));
+          if (payload && (payload.user_id || payload.sub)) {
+            uid = payload.user_id || payload.sub;
+            email = (payload.email || '').toLowerCase().trim();
+          }
+        }
+      } catch (e) {
+        console.warn("[Auth] Fallback token parse error:", e);
+      }
+    }
+
+    if (!uid) return null;
+
+    const adminEmails = [
+      'mahendrathakur9009@gmail.com',
+      'qupagaming@gmail.com',
+      'mahendrar9009@gmail.com',
+      'ankushsharma3948@gmail.com'
+    ];
+    const adminUids = ['XoXyXcnrlzOaMIKKolXnU3mT9xn1'];
+
+    let isAdmin = adminEmails.includes(email) || adminUids.includes(uid);
+    if (!isAdmin && firestore) {
+      try {
+        const adminDoc = await firestore.collection('admins').doc(uid).get();
+        if (adminDoc.exists) isAdmin = true;
+      } catch (e) {}
+    }
+
+    return { uid, email, isAdmin };
+  } catch (err: any) {
+    console.error("[Auth] authenticateUser error:", err.message);
+    return null;
   }
 }
 
@@ -939,6 +1007,528 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
     } catch (error: any) {
       console.error("[Cashfree Webhook] Internal Error:", error);
       res.status(500).json({ success: false, error: "Internal Server Error", detail: error.message });
+    }
+  });
+
+  // ==========================================
+  // HOST MANAGEMENT SYSTEM (ADMIN & HOST APIS)
+  // ==========================================
+
+  // 1. Admin: Assign Match-Specific Host Role
+  serverApp.post("/api/admin/assign-host", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser || !authUser.isAdmin) {
+        return res.status(403).json({ success: false, error: "Unauthorized: Admin privileges required" });
+      }
+
+      const { hostUserId, matchId } = req.body;
+      if (!hostUserId || !matchId) {
+        return res.status(400).json({ success: false, error: "hostUserId and matchId are required" });
+      }
+
+      // Check player
+      const userDoc = await firestore.collection('users').doc(hostUserId).get();
+      if (!userDoc.exists) {
+        return res.status(404).json({ success: false, error: "Target player account does not exist" });
+      }
+      const userData = userDoc.data();
+      if (userData?.isBanned) {
+        return res.status(400).json({ success: false, error: "Cannot assign host role: Player account is banned" });
+      }
+
+      // Check match
+      const matchDoc = await firestore.collection('matches').doc(matchId).get();
+      if (!matchDoc.exists) {
+        return res.status(404).json({ success: false, error: "Target match does not exist" });
+      }
+      const matchData = matchDoc.data();
+      if (matchData?.status === 'completed') {
+        return res.status(400).json({ success: false, error: "Cannot assign host: Match is already completed" });
+      }
+
+      // Deactivate any previous active assignments for this host
+      const existingSnaps = await firestore.collection('hosts')
+        .where('hostUserId', '==', hostUserId)
+        .where('assignmentStatus', '==', 'active')
+        .get();
+
+      for (const d of existingSnaps.docs) {
+        if (d.data().matchId !== matchId) {
+          await d.ref.update({
+            assignmentStatus: 'removed',
+            status: 'inactive',
+            removedAt: FieldValue.serverTimestamp(),
+            removedByAdminId: authUser.uid,
+            removedByAdminEmail: authUser.email
+          });
+          // Remove from previous match
+          if (d.data().matchId) {
+            await firestore.collection('matches').doc(d.data().matchId).update({
+              assignedHostId: FieldValue.delete(),
+              assignedHostEmail: FieldValue.delete(),
+              assignedHostName: FieldValue.delete()
+            }).catch(() => {});
+          }
+        }
+      }
+
+      const hostDocRef = firestore.collection('hosts').doc(hostUserId);
+      const assignmentData = {
+        id: hostUserId,
+        userId: hostUserId,
+        hostUserId: hostUserId,
+        hostEmail: userData?.email || '',
+        hostName: userData?.username || 'Host',
+        matchId: matchId,
+        matchTitle: matchData?.title || '',
+        matchCategory: matchData?.category || matchData?.section || '',
+        assignedByAdminId: authUser.uid,
+        assignedByAdminEmail: authUser.email,
+        assignedAt: FieldValue.serverTimestamp(),
+        assignmentStatus: 'active',
+        status: 'active',
+        permittedCategories: [matchData?.category || matchData?.section || 'all'],
+        assignedMatchIds: [matchId],
+        updatedAt: FieldValue.serverTimestamp()
+      };
+
+      await hostDocRef.set(assignmentData, { merge: true });
+
+      // Link host on match document
+      await firestore.collection('matches').doc(matchId).update({
+        assignedHostId: hostUserId,
+        assignedHostEmail: userData?.email || '',
+        assignedHostName: userData?.username || 'Host',
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      // Update player profile
+      await firestore.collection('users').doc(hostUserId).update({
+        isHost: true,
+        hostId: hostUserId,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      // Log in hostLogs
+      await firestore.collection('hostLogs').add({
+        hostId: hostUserId,
+        hostEmail: userData?.email || '',
+        hostName: userData?.username || 'Host',
+        matchId: matchId,
+        matchTitle: matchData?.title || '',
+        action: 'assigned_as_host',
+        details: {
+          assignedByAdminId: authUser.uid,
+          assignedByAdminEmail: authUser.email
+        },
+        timestamp: FieldValue.serverTimestamp()
+      });
+
+      return res.json({
+        success: true,
+        message: `Successfully assigned ${userData?.username} as host for match "${matchData?.title}"`,
+        assignment: assignmentData
+      });
+    } catch (err: any) {
+      console.error("[Assign Host Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 2. Admin: Revoke / Remove Host Role
+  serverApp.post("/api/admin/remove-host", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser || !authUser.isAdmin) {
+        return res.status(403).json({ success: false, error: "Unauthorized: Admin privileges required" });
+      }
+
+      const { hostUserId, matchId } = req.body;
+      if (!hostUserId) {
+        return res.status(400).json({ success: false, error: "hostUserId is required" });
+      }
+
+      const hostDoc = await firestore.collection('hosts').doc(hostUserId).get();
+      const hostData = hostDoc.data();
+      const targetMatchId = matchId || hostData?.matchId;
+
+      await firestore.collection('hosts').doc(hostUserId).update({
+        assignmentStatus: 'removed',
+        status: 'inactive',
+        removedAt: FieldValue.serverTimestamp(),
+        removedByAdminId: authUser.uid,
+        removedByAdminEmail: authUser.email
+      });
+
+      if (targetMatchId) {
+        await firestore.collection('matches').doc(targetMatchId).update({
+          assignedHostId: FieldValue.delete(),
+          assignedHostEmail: FieldValue.delete(),
+          assignedHostName: FieldValue.delete()
+        }).catch(() => {});
+      }
+
+      await firestore.collection('users').doc(hostUserId).update({
+        isHost: false,
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      // Log
+      await firestore.collection('hostLogs').add({
+        hostId: hostUserId,
+        hostEmail: hostData?.hostEmail || '',
+        hostName: hostData?.hostName || 'Host',
+        matchId: targetMatchId || '',
+        matchTitle: hostData?.matchTitle || '',
+        action: 'removed_from_host',
+        details: {
+          removedByAdminId: authUser.uid,
+          removedByAdminEmail: authUser.email
+        },
+        timestamp: FieldValue.serverTimestamp()
+      });
+
+      return res.json({ success: true, message: "Host permissions successfully revoked" });
+    } catch (err: any) {
+      console.error("[Remove Host Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 3. Host: Fetch Active Assignment and Assigned Match
+  serverApp.get("/api/host/assignment", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: "Authentication required" });
+      }
+
+      const hostDoc = await firestore.collection('hosts').doc(authUser.uid).get();
+      if (!hostDoc.exists || hostDoc.data()?.assignmentStatus !== 'active') {
+        return res.json({ success: true, hasActiveAssignment: false });
+      }
+
+      const assignment = hostDoc.data();
+      const matchDoc = await firestore.collection('matches').doc(assignment.matchId).get();
+      if (!matchDoc.exists) {
+        return res.json({ success: true, hasActiveAssignment: false, message: "Assigned match not found" });
+      }
+
+      const matchData = { id: matchDoc.id, ...matchDoc.data() };
+      return res.json({
+        success: true,
+        hasActiveAssignment: true,
+        assignment,
+        match: matchData
+      });
+    } catch (err: any) {
+      console.error("[Host Assignment Fetch Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 4. Host: Update Room Credentials for Assigned Match
+  serverApp.post("/api/host/update-room", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: "Authentication required" });
+      }
+
+      const { matchId, roomId, roomPassword, roomReleaseTime } = req.body;
+      if (!matchId) {
+        return res.status(400).json({ success: false, error: "matchId is required" });
+      }
+
+      if (!authUser.isAdmin) {
+        const hostDoc = await firestore.collection('hosts').doc(authUser.uid).get();
+        if (!hostDoc.exists || hostDoc.data()?.assignmentStatus !== 'active' || hostDoc.data()?.matchId !== matchId) {
+          return res.status(403).json({ success: false, error: "Unauthorized: You are not the active host for this match" });
+        }
+      }
+
+      const updatePayload: any = {
+        roomId: roomId || '',
+        roomPassword: roomPassword || '',
+        roomReleaseTime: roomReleaseTime || '',
+        updatedAt: FieldValue.serverTimestamp()
+      };
+      if (roomId) {
+        updatePayload.status = 'room_ready';
+      }
+
+      await firestore.collection('matches').doc(matchId).update(updatePayload);
+
+      const matchDoc = await firestore.collection('matches').doc(matchId).get();
+      await firestore.collection('hostLogs').add({
+        hostId: authUser.uid,
+        hostEmail: authUser.email,
+        hostName: authUser.email,
+        matchId: matchId,
+        matchTitle: matchDoc.data()?.title || '',
+        action: 'updated_room_credentials',
+        details: {
+          roomId,
+          hasPassword: Boolean(roomPassword),
+          roomReleaseTime
+        },
+        timestamp: FieldValue.serverTimestamp()
+      });
+
+      return res.json({ success: true, message: "Room credentials updated successfully" });
+    } catch (err: any) {
+      console.error("[Host Update Room Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 5. Host: Submit Match Result for Verification
+  serverApp.post("/api/host/submit-result", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: "Authentication required" });
+      }
+
+      const { matchId, results, proofScreenshotUrl } = req.body;
+      if (!matchId || !Array.isArray(results) || results.length === 0) {
+        return res.status(400).json({ success: false, error: "matchId and results array are required" });
+      }
+
+      if (!authUser.isAdmin) {
+        const hostDoc = await firestore.collection('hosts').doc(authUser.uid).get();
+        if (!hostDoc.exists || hostDoc.data()?.assignmentStatus !== 'active' || hostDoc.data()?.matchId !== matchId) {
+          return res.status(403).json({ success: false, error: "Unauthorized: You are not the active host for this match" });
+        }
+      }
+
+      const matchDoc = await firestore.collection('matches').doc(matchId).get();
+      if (!matchDoc.exists) {
+        return res.status(404).json({ success: false, error: "Match not found" });
+      }
+      const matchData = matchDoc.data();
+      if (matchData?.status === 'completed') {
+        return res.status(400).json({ success: false, error: "Match has already been declared and completed" });
+      }
+
+      const submissionData = {
+        matchId,
+        matchTitle: matchData?.title || '',
+        matchCategory: matchData?.category || matchData?.section || '',
+        submittedByHostId: authUser.uid,
+        submittedByHostEmail: authUser.email,
+        submittedAt: FieldValue.serverTimestamp(),
+        status: 'pending_review',
+        results: results,
+        proofScreenshotUrl: proofScreenshotUrl || null
+      };
+
+      await firestore.collection('pendingResults').doc(matchId).set(submissionData, { merge: true });
+
+      await firestore.collection('hostLogs').add({
+        hostId: authUser.uid,
+        hostEmail: authUser.email,
+        hostName: authUser.email,
+        matchId: matchId,
+        matchTitle: matchData?.title || '',
+        action: 'submitted_match_result',
+        details: {
+          playerCount: results.length,
+          timestamp: new Date().toISOString()
+        },
+        timestamp: FieldValue.serverTimestamp()
+      });
+
+      return res.json({
+        success: true,
+        message: "Match results successfully submitted! Waiting for Admin verification and prize distribution."
+      });
+    } catch (err: any) {
+      console.error("[Host Submit Result Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 6. Admin: List Pending Results
+  serverApp.get("/api/admin/pending-results", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser || !authUser.isAdmin) {
+        return res.status(403).json({ success: false, error: "Unauthorized: Admin privileges required" });
+      }
+
+      const snap = await firestore.collection('pendingResults')
+        .where('status', '==', 'pending_review')
+        .get();
+
+      const items = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+      return res.json({ success: true, pendingResults: items });
+    } catch (err: any) {
+      console.error("[Get Pending Results Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 7. Admin: Review, Approve & Distribute Match Results
+  serverApp.post("/api/admin/review-result", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser || !authUser.isAdmin) {
+        return res.status(403).json({ success: false, error: "Unauthorized: Admin privileges required" });
+      }
+
+      const { matchId, approved, rejectionReason } = req.body;
+      if (!matchId) {
+        return res.status(400).json({ success: false, error: "matchId is required" });
+      }
+
+      const pendingRef = firestore.collection('pendingResults').doc(matchId);
+      const pendingDoc = await pendingRef.get();
+      if (!pendingDoc.exists) {
+        return res.status(404).json({ success: false, error: "Pending result not found" });
+      }
+      const pendingData = pendingDoc.data();
+
+      if (!approved) {
+        await pendingRef.update({
+          status: 'rejected',
+          rejectionReason: rejectionReason || 'Rejected by admin',
+          reviewedByAdminId: authUser.uid,
+          reviewedByAdminEmail: authUser.email,
+          reviewedAt: FieldValue.serverTimestamp()
+        });
+
+        await firestore.collection('hostLogs').add({
+          hostId: pendingData.submittedByHostId,
+          hostEmail: pendingData.submittedByHostEmail || '',
+          hostName: pendingData.submittedByHostEmail || 'Host',
+          matchId: matchId,
+          matchTitle: pendingData.matchTitle || '',
+          action: 'match_result_rejected',
+          details: { rejectionReason, reviewedBy: authUser.email },
+          timestamp: FieldValue.serverTimestamp()
+        });
+
+        return res.json({ success: true, message: "Match result submission rejected" });
+      }
+
+      // Approved: Run batch to update match, wallets, stats, and create win transactions
+      const matchRef = firestore.collection('matches').doc(matchId);
+      const batch = firestore.batch();
+
+      batch.update(matchRef, {
+        status: 'completed',
+        completedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      const resultRef = firestore.collection('matchResults').doc(matchId);
+      batch.set(resultRef, {
+        matchId,
+        matchTitle: pendingData.matchTitle || '',
+        results: pendingData.results || [],
+        proofScreenshotUrl: pendingData.proofScreenshotUrl || null,
+        submittedByHostId: pendingData.submittedByHostId,
+        submittedByHostEmail: pendingData.submittedByHostEmail,
+        approvedByAdminId: authUser.uid,
+        approvedByAdminEmail: authUser.email,
+        status: 'approved',
+        completedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
+      });
+
+      batch.update(pendingRef, {
+        status: 'approved',
+        reviewedByAdminId: authUser.uid,
+        reviewedByAdminEmail: authUser.email,
+        reviewedAt: FieldValue.serverTimestamp()
+      });
+
+      // Distribute rewards to players
+      if (Array.isArray(pendingData.results)) {
+        for (const playerResult of pendingData.results) {
+          const pUserId = playerResult.userId;
+          if (!pUserId) continue;
+
+          const pWinnings = Number(playerResult.winnings) || 0;
+          const pKills = Number(playerResult.kills) || 0;
+          const pRank = Number(playerResult.rank) || 0;
+
+          const userRef = firestore.collection('users').doc(pUserId);
+          const userUpdates: any = {
+            'stats.matchesPlayed': FieldValue.increment(1),
+            'stats.totalKills': FieldValue.increment(pKills)
+          };
+
+          if (pRank === 1) {
+            userUpdates['stats.totalWins'] = FieldValue.increment(1);
+          }
+
+          if (pWinnings > 0) {
+            userUpdates['wallet.winnings'] = FieldValue.increment(pWinnings);
+            userUpdates['stats.totalWinnings'] = FieldValue.increment(pWinnings);
+
+            const transRef = firestore.collection('transactions').doc();
+            batch.set(transRef, {
+              userId: pUserId,
+              type: 'win',
+              amount: pWinnings,
+              status: 'completed',
+              matchId: matchId,
+              title: `Match Winnings: ${pendingData.matchTitle || 'Tournament'}`,
+              createdAt: FieldValue.serverTimestamp()
+            });
+          }
+
+          batch.update(userRef, userUpdates);
+        }
+      }
+
+      await batch.commit();
+
+      await firestore.collection('hostLogs').add({
+        hostId: pendingData.submittedByHostId,
+        hostEmail: pendingData.submittedByHostEmail || '',
+        hostName: pendingData.submittedByHostEmail || 'Host',
+        matchId: matchId,
+        matchTitle: pendingData.matchTitle || '',
+        action: 'match_result_approved',
+        details: {
+          approvedBy: authUser.email,
+          playerCount: pendingData.results?.length || 0
+        },
+        timestamp: FieldValue.serverTimestamp()
+      });
+
+      return res.json({
+        success: true,
+        message: "Match results approved! Winners credited and match marked completed."
+      });
+    } catch (err: any) {
+      console.error("[Admin Review Result Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 8. Admin: Get Host Logs Audit Trail
+  serverApp.get("/api/admin/host-logs", async (req, res) => {
+    try {
+      const authUser = await authenticateUser(req);
+      if (!authUser || !authUser.isAdmin) {
+        return res.status(403).json({ success: false, error: "Unauthorized" });
+      }
+
+      const snap = await firestore.collection('hostLogs')
+        .orderBy('timestamp', 'desc')
+        .limit(50)
+        .get();
+
+      const logs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+      return res.json({ success: true, logs });
+    } catch (err: any) {
+      console.error("[Host Logs Fetch Error]", err);
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 

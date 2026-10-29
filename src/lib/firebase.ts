@@ -15,12 +15,13 @@ setLogLevel('error');
 
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firebase Auth with reliable session persistence (IndexedDB + localStorage fallback)
-// This guarantees session persistence across app restarts, reloads, and mobile WebView environments.
+// Initialize Firebase Auth with reliable session persistence (localStorage primary + IndexedDB secondary)
+// Using browserLocalPersistence (localStorage) first ensures synchronous retrieval and prevents
+// session loss when IndexedDB connections are suspended or evicted during 1-2 hours of inactivity.
 let authInstance: Auth;
 try {
   authInstance = initializeAuth(app, {
-    persistence: [indexedDBLocalPersistence, browserLocalPersistence]
+    persistence: [browserLocalPersistence, indexedDBLocalPersistence]
   });
 } catch {
   authInstance = getAuth(app);

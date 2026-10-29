@@ -30,6 +30,7 @@ import GameModes from './pages/GameModes';
 import AdminModes from './pages/AdminModes';
 import Leaderboard from './pages/Leaderboard';
 import MatchDetails from './pages/MatchDetails';
+import HostDashboard from './pages/HostDashboard';
 import GlobalNotificationListener from './components/GlobalNotificationListener';
 
 const DEFAULT_USER_DATA = {
@@ -68,7 +69,8 @@ const pageToPath = {
   [Page.GAME_MODES]: '/game-modes',
   [Page.ADMIN_MODES]: '/admin/modes',
   [Page.LEADERBOARD]: '/leaderboard',
-  [Page.MATCH_DETAILS]: '/match-details'
+  [Page.MATCH_DETAILS]: '/match-details',
+  [Page.HOST_DASHBOARD]: '/host'
 };
 
 const pathToPage: Record<string, Page> = {
@@ -91,7 +93,8 @@ const pathToPage: Record<string, Page> = {
   '/profile/stats': Page.GAME_STATS,
   '/game-modes': Page.GAME_MODES,
   '/admin/modes': Page.ADMIN_MODES,
-  '/leaderboard': Page.LEADERBOARD
+  '/leaderboard': Page.LEADERBOARD,
+  '/host': Page.HOST_DASHBOARD
 };
 
 function ScrollToTop() {
@@ -105,7 +108,17 @@ function ScrollToTop() {
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    if (auth.currentUser) return true;
+    try {
+      const cached = localStorage.getItem('smart_battle_cached_user');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.id) return true;
+      }
+    } catch {}
+    return false;
+  });
   const [user, setUser] = useState<User | null>(() => {
     try {
       const cached = localStorage.getItem('smart_battle_cached_user');
@@ -132,36 +145,42 @@ export default function App() {
       const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
       AuthLogger.wakeEvent('tab_wake_check', isVisible, isOnline);
 
-      if (isVisible && auth.currentUser) {
-        try {
-          // Read current token info safely without forcing refresh first
-          const tokenResult = await auth.currentUser.getIdTokenResult(false);
-          const expTime = new Date(tokenResult.expirationTime).getTime();
-          const remainingMs = expTime - Date.now();
+      if (isVisible) {
+        if (!auth.currentUser) {
+          // If tab woke up and currentUser is restoring, wait for authStateReady
+          await auth.authStateReady().catch(() => {});
+        }
+        if (auth.currentUser) {
+          try {
+            // Read current token info safely without forcing refresh first
+            const tokenResult = await auth.currentUser.getIdTokenResult(false);
+            const expTime = new Date(tokenResult.expirationTime).getTime();
+            const remainingMs = expTime - Date.now();
 
-          // If token has less than 5 minutes remaining or is already expired (> 1 hour old), refresh it proactively
-          if (remainingMs < 5 * 60 * 1000) {
-            AuthLogger.refreshAttempt('wake_session', `Token near/past expiry (${Math.round(remainingMs / 60000)}m left)`);
-            await auth.currentUser.getIdToken(true);
-            const renewedResult = await auth.currentUser.getIdTokenResult(false);
-            AuthLogger.refreshSuccess(renewedResult.expirationTime);
-          } else {
-            AuthLogger.tokenStatus(auth.currentUser, 'wake_valid');
-          }
-        } catch (err: any) {
-          const isNetError = 
-            !navigator.onLine || 
-            err?.code === 'auth/network-request-failed' ||
-            err?.message?.includes('network') ||
-            err?.message?.includes('offline');
+            // If token has less than 5 minutes remaining or is already expired (> 1 hour old), refresh it proactively
+            if (remainingMs < 5 * 60 * 1000) {
+              AuthLogger.refreshAttempt('wake_session', `Token near/past expiry (${Math.round(remainingMs / 60000)}m left)`);
+              await auth.currentUser.getIdToken(true);
+              const renewedResult = await auth.currentUser.getIdTokenResult(false);
+              AuthLogger.refreshSuccess(renewedResult.expirationTime);
+            } else {
+              AuthLogger.tokenStatus(auth.currentUser, 'wake_valid');
+            }
+          } catch (err: any) {
+            const isNetError = 
+              !navigator.onLine || 
+              err?.code === 'auth/network-request-failed' ||
+              err?.message?.includes('network') ||
+              err?.message?.includes('offline');
 
-          AuthLogger.refreshError(err, isNetError);
+            AuthLogger.refreshError(err, isNetError);
 
-          // CRITICAL: NEVER log out user on network/offline errors or general expired tokens!
-          // An expired access token is normal after 1-2 hours; the refresh token remains valid.
-          // ONLY log out if the user has been explicitly disabled or deleted by the Firebase backend:
-          if (err?.code === 'auth/user-disabled' || err?.code === 'auth/user-not-found') {
-            handleLogout('Account disabled or removed by server');
+            // CRITICAL: NEVER log out user on network/offline errors or general expired tokens!
+            // An expired access token is normal after 1-2 hours; the refresh token remains valid.
+            // ONLY log out if the user has been explicitly disabled or deleted by the Firebase backend:
+            if (err?.code === 'auth/user-disabled' || err?.code === 'auth/user-not-found') {
+              handleLogout('Account disabled or removed by server');
+            }
           }
         }
       }
@@ -389,18 +408,8 @@ export default function App() {
     let unsubscribeAuth: (() => void) | null = null;
     let isMounted = true;
 
-    const setupAuth = async () => {
-      AuthLogger.sessionInit('Awaiting auth.authStateReady() for persistent session recovery');
-      
-      // Wait for Firebase Auth persistence (IndexedDB/localStorage) to finish loading
-      try {
-        await auth.authStateReady();
-        AuthLogger.sessionInit('auth.authStateReady() resolved');
-      } catch (e: any) {
-        console.warn('[Auth] authStateReady resolution notice:', e?.message);
-      }
-
-      if (!isMounted) return;
+    const setupAuth = () => {
+      AuthLogger.sessionInit('Registering auth listeners immediately on mount');
 
       // Monitor token changes/refresh events proactively
       unsubscribeIdToken = onIdTokenChanged(auth, async (currentUser) => {
@@ -555,8 +564,23 @@ export default function App() {
             console.warn("Notice: registrations fetch in background:", error);
           }
         } else {
-          // Genuinely unauthenticated state (only runs after authStateReady has verified storage)
-          AuthLogger.sessionInit('No authenticated user session found');
+          // Await authStateReady to ensure persistence engines have fully finished loading
+          try {
+            await auth.authStateReady();
+          } catch (e: any) {
+            console.warn('[Auth] authStateReady resolution error:', e?.message);
+          }
+
+          if (!isMounted) return;
+
+          // If auth.currentUser was restored while awaiting authStateReady, do not log out
+          if (auth.currentUser) {
+            AuthLogger.sessionInit('User session restored during authStateReady resolution');
+            return;
+          }
+
+          // Genuinely unauthenticated state (only after storage persistence has verified no user exists)
+          AuthLogger.sessionInit('No authenticated user session found after authStateReady');
           setIsLoggedIn(false);
           setUser(null);
           setJoinedMatchIds([]);
@@ -569,6 +593,17 @@ export default function App() {
           }
           setLoading(false);
         }
+      });
+
+      // Also ensure loading state resolves even if storage is empty from the start
+      auth.authStateReady().then(() => {
+        if (!isMounted) return;
+        if (!auth.currentUser) {
+          setLoading(false);
+        }
+      }).catch(() => {
+        if (!isMounted) return;
+        setLoading(false);
       });
     };
 
@@ -934,6 +969,12 @@ export default function App() {
               <Route path="/leaderboard" element={
                 <ProtectedRoute>
                   <Leaderboard />
+                </ProtectedRoute>
+              } />
+
+              <Route path="/host" element={
+                <ProtectedRoute>
+                  <HostDashboard user={user!} onPageChange={handlePageChange} />
                 </ProtectedRoute>
               } />
 
