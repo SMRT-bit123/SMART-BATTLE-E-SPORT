@@ -112,6 +112,8 @@ export interface User {
   isAdmin?: boolean;
   isHost?: boolean;
   hostId?: string;
+  hostModeId?: string;
+  hostModeTitle?: string;
   hostCategories?: string[];
   stats: UserStats;
   gameIGNs?: Record<string, string>;
@@ -155,13 +157,17 @@ export interface HostAssignment {
   hostUserId: string;
   hostEmail: string;
   hostName: string;
-  matchId: string;
+  modeId: string;
+  modeTitle: string;
+  gameId?: string;
+  matchId?: string;
   matchTitle?: string;
   matchCategory?: string;
   assignedByAdminId: string;
   assignedByAdminEmail?: string;
   assignedAt: any;
   assignmentStatus: 'active' | 'removed';
+  status?: 'active' | 'inactive';
   removedAt?: any;
   removedByAdminId?: string;
   removedByAdminEmail?: string;

@@ -1011,10 +1011,64 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
   });
 
   // ==========================================
-  // HOST MANAGEMENT SYSTEM (ADMIN & HOST APIS)
+  // HOST MANAGEMENT SYSTEM (MODE-BASED APIS)
   // ==========================================
 
-  // 1. Admin: Assign Match-Specific Host Role
+  // Mode verification helper for server-side authorization
+  function matchBelongsToMode(match: any, targetModeId?: string, targetModeTitle?: string): boolean {
+    if (!match || !targetModeId) return false;
+    const modeId = targetModeId.toLowerCase().trim().replace(/^freefire_/, '');
+    const matchModeId = (match.modeId || '').toLowerCase().trim().replace(/^freefire_/, '');
+    const matchCat = (match.category || '').toLowerCase().trim().replace(/^freefire_/, '');
+    const matchSection = (match.section || '').toLowerCase().trim();
+    const matchMode = (match.mode || '').toLowerCase().trim();
+    const matchTitle = (match.title || '').toLowerCase().trim();
+
+    // Direct ID or category matching
+    if (matchModeId && (matchModeId === modeId || matchModeId.includes(modeId))) return true;
+    if (matchCat && (matchCat === modeId || matchCat.includes(modeId))) return true;
+
+    // Title matching if provided
+    if (targetModeTitle) {
+      const tLower = targetModeTitle.toLowerCase().trim();
+      if (matchSection === tLower || matchMode === tLower || matchTitle.includes(tLower)) return true;
+    }
+
+    // Canonical Freefire Modes
+    if (modeId === 'cs_headshot' || modeId.includes('headshot')) {
+      return matchSection.includes('headshot') || matchMode.includes('headshot') || matchTitle.includes('headshot') || matchCat.includes('headshot');
+    }
+    if (modeId === 'free_match' || modeId.includes('free')) {
+      return matchSection.includes('free') || matchMode.includes('free') || matchTitle.includes('free') || match.entryFee === 0;
+    }
+    if (modeId === 'br_solo') {
+      return (matchSection.includes('battle') || !matchSection || matchSection === 'general') && (matchMode === 'solo' || matchModeId === 'br_solo' || matchTitle.includes('solo'));
+    }
+    if (modeId === 'br_duo') {
+      return (matchSection.includes('battle') || !matchSection || matchSection === 'general') && (matchMode === 'duo' || matchModeId === 'br_duo' || matchTitle.includes('duo'));
+    }
+    if (modeId === 'br_squad') {
+      return (matchSection.includes('battle') || !matchSection || matchSection === 'general') && (matchMode === 'squad' || matchModeId === 'br_squad' || matchTitle.includes('squad'));
+    }
+    if (modeId === 'cs_solo') {
+      return matchSection.includes('clash') && (matchMode === 'solo' || matchTitle.includes('solo'));
+    }
+    if (modeId === 'cs_duo') {
+      return matchSection.includes('clash') && (matchMode === 'duo' || matchTitle.includes('duo'));
+    }
+    if (modeId === 'lone_wolf_solo') {
+      return matchSection.includes('lone') && (matchMode === 'solo' || matchTitle.includes('solo'));
+    }
+    if (modeId === 'lone_wolf_duo') {
+      return matchSection.includes('lone') && (matchMode === 'duo' || matchTitle.includes('duo'));
+    }
+
+    const combined = `${matchTitle} ${matchSection} ${matchMode}`.replace(/[_-]/g, ' ');
+    const modeKeywords = modeId.replace(/[_-]/g, ' ');
+    return combined.includes(modeKeywords);
+  }
+
+  // 1. Admin: Assign Game Mode Host Role
   serverApp.post("/api/admin/assign-host", async (req, res) => {
     try {
       const authUser = await authenticateUser(req);
@@ -1022,9 +1076,9 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         return res.status(403).json({ success: false, error: "Unauthorized: Admin privileges required" });
       }
 
-      const { hostUserId, matchId } = req.body;
-      if (!hostUserId || !matchId) {
-        return res.status(400).json({ success: false, error: "hostUserId and matchId are required" });
+      const { hostUserId, modeId, modeTitle, gameId } = req.body;
+      if (!hostUserId || !modeId) {
+        return res.status(400).json({ success: false, error: "hostUserId and modeId are required" });
       }
 
       // Check player
@@ -1037,42 +1091,6 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         return res.status(400).json({ success: false, error: "Cannot assign host role: Player account is banned" });
       }
 
-      // Check match
-      const matchDoc = await firestore.collection('matches').doc(matchId).get();
-      if (!matchDoc.exists) {
-        return res.status(404).json({ success: false, error: "Target match does not exist" });
-      }
-      const matchData = matchDoc.data();
-      if (matchData?.status === 'completed') {
-        return res.status(400).json({ success: false, error: "Cannot assign host: Match is already completed" });
-      }
-
-      // Deactivate any previous active assignments for this host
-      const existingSnaps = await firestore.collection('hosts')
-        .where('hostUserId', '==', hostUserId)
-        .where('assignmentStatus', '==', 'active')
-        .get();
-
-      for (const d of existingSnaps.docs) {
-        if (d.data().matchId !== matchId) {
-          await d.ref.update({
-            assignmentStatus: 'removed',
-            status: 'inactive',
-            removedAt: FieldValue.serverTimestamp(),
-            removedByAdminId: authUser.uid,
-            removedByAdminEmail: authUser.email
-          });
-          // Remove from previous match
-          if (d.data().matchId) {
-            await firestore.collection('matches').doc(d.data().matchId).update({
-              assignedHostId: FieldValue.delete(),
-              assignedHostEmail: FieldValue.delete(),
-              assignedHostName: FieldValue.delete()
-            }).catch(() => {});
-          }
-        }
-      }
-
       const hostDocRef = firestore.collection('hosts').doc(hostUserId);
       const assignmentData = {
         id: hostUserId,
@@ -1080,33 +1098,26 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         hostUserId: hostUserId,
         hostEmail: userData?.email || '',
         hostName: userData?.username || 'Host',
-        matchId: matchId,
-        matchTitle: matchData?.title || '',
-        matchCategory: matchData?.category || matchData?.section || '',
+        modeId: modeId,
+        modeTitle: modeTitle || modeId,
+        gameId: gameId || 'freefire',
         assignedByAdminId: authUser.uid,
         assignedByAdminEmail: authUser.email,
         assignedAt: FieldValue.serverTimestamp(),
         assignmentStatus: 'active',
         status: 'active',
-        permittedCategories: [matchData?.category || matchData?.section || 'all'],
-        assignedMatchIds: [matchId],
+        permittedCategories: [modeId],
         updatedAt: FieldValue.serverTimestamp()
       };
 
       await hostDocRef.set(assignmentData, { merge: true });
 
-      // Link host on match document
-      await firestore.collection('matches').doc(matchId).update({
-        assignedHostId: hostUserId,
-        assignedHostEmail: userData?.email || '',
-        assignedHostName: userData?.username || 'Host',
-        updatedAt: FieldValue.serverTimestamp()
-      });
-
       // Update player profile
       await firestore.collection('users').doc(hostUserId).update({
         isHost: true,
         hostId: hostUserId,
+        hostModeId: modeId,
+        hostModeTitle: modeTitle || modeId,
         updatedAt: FieldValue.serverTimestamp()
       });
 
@@ -1115,10 +1126,14 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         hostId: hostUserId,
         hostEmail: userData?.email || '',
         hostName: userData?.username || 'Host',
-        matchId: matchId,
-        matchTitle: matchData?.title || '',
+        modeId: modeId,
+        modeTitle: modeTitle || modeId,
+        matchId: 'MODE_ASSIGNMENT',
+        matchTitle: `Mode: ${modeTitle || modeId}`,
         action: 'assigned_as_host',
         details: {
+          modeId,
+          modeTitle: modeTitle || modeId,
           assignedByAdminId: authUser.uid,
           assignedByAdminEmail: authUser.email
         },
@@ -1127,7 +1142,7 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
 
       return res.json({
         success: true,
-        message: `Successfully assigned ${userData?.username} as host for match "${matchData?.title}"`,
+        message: `Successfully assigned ${userData?.username} as host for mode "${modeTitle || modeId}"`,
         assignment: assignmentData
       });
     } catch (err: any) {
@@ -1144,14 +1159,13 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         return res.status(403).json({ success: false, error: "Unauthorized: Admin privileges required" });
       }
 
-      const { hostUserId, matchId } = req.body;
+      const { hostUserId } = req.body;
       if (!hostUserId) {
         return res.status(400).json({ success: false, error: "hostUserId is required" });
       }
 
       const hostDoc = await firestore.collection('hosts').doc(hostUserId).get();
       const hostData = hostDoc.data();
-      const targetMatchId = matchId || hostData?.matchId;
 
       await firestore.collection('hosts').doc(hostUserId).update({
         assignmentStatus: 'removed',
@@ -1161,16 +1175,10 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         removedByAdminEmail: authUser.email
       });
 
-      if (targetMatchId) {
-        await firestore.collection('matches').doc(targetMatchId).update({
-          assignedHostId: FieldValue.delete(),
-          assignedHostEmail: FieldValue.delete(),
-          assignedHostName: FieldValue.delete()
-        }).catch(() => {});
-      }
-
       await firestore.collection('users').doc(hostUserId).update({
         isHost: false,
+        hostModeId: FieldValue.delete(),
+        hostModeTitle: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp()
       });
 
@@ -1179,10 +1187,13 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         hostId: hostUserId,
         hostEmail: hostData?.hostEmail || '',
         hostName: hostData?.hostName || 'Host',
-        matchId: targetMatchId || '',
-        matchTitle: hostData?.matchTitle || '',
+        modeId: hostData?.modeId || '',
+        modeTitle: hostData?.modeTitle || '',
+        matchId: 'MODE_REVOCATION',
+        matchTitle: `Mode: ${hostData?.modeTitle || hostData?.modeId || 'All'}`,
         action: 'removed_from_host',
         details: {
+          modeId: hostData?.modeId,
           removedByAdminId: authUser.uid,
           removedByAdminEmail: authUser.email
         },
@@ -1196,7 +1207,7 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
     }
   });
 
-  // 3. Host: Fetch Active Assignment and Assigned Match
+  // 3. Host: Fetch Active Assignment and Eligible Mode Matches
   serverApp.get("/api/host/assignment", async (req, res) => {
     try {
       const authUser = await authenticateUser(req);
@@ -1210,17 +1221,32 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
       }
 
       const assignment = hostDoc.data();
-      const matchDoc = await firestore.collection('matches').doc(assignment.matchId).get();
-      if (!matchDoc.exists) {
-        return res.json({ success: true, hasActiveAssignment: false, message: "Assigned match not found" });
-      }
+      const assignedModeId = assignment?.modeId;
+      const assignedModeTitle = assignment?.modeTitle;
 
-      const matchData = { id: matchDoc.id, ...matchDoc.data() };
+      // Query all non-completed matches
+      const matchesSnap = await firestore.collection('matches')
+        .where('status', 'in', ['upcoming', 'ongoing', 'active', 'room_ready'])
+        .get();
+
+      const allMatches = matchesSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+      
+      // Filter matches belonging to the assigned mode (or legacy matchId)
+      const eligibleMatches = allMatches.filter((m: any) => {
+        if (assignedModeId && matchBelongsToMode(m, assignedModeId, assignedModeTitle)) {
+          return true;
+        }
+        if (assignment?.matchId && m.id === assignment.matchId) {
+          return true;
+        }
+        return false;
+      });
+
       return res.json({
         success: true,
         hasActiveAssignment: true,
         assignment,
-        match: matchData
+        matches: eligibleMatches
       });
     } catch (err: any) {
       console.error("[Host Assignment Fetch Error]", err);
@@ -1228,7 +1254,7 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
     }
   });
 
-  // 4. Host: Update Room Credentials for Assigned Match
+  // 4. Host: Update Room Credentials for an Eligible Match in Assigned Mode
   serverApp.post("/api/host/update-room", async (req, res) => {
     try {
       const authUser = await authenticateUser(req);
@@ -1241,10 +1267,28 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         return res.status(400).json({ success: false, error: "matchId is required" });
       }
 
+      const matchDoc = await firestore.collection('matches').doc(matchId).get();
+      if (!matchDoc.exists) {
+        return res.status(404).json({ success: false, error: "Match not found" });
+      }
+      const matchData = matchDoc.data();
+
+      // Authorization: Check that host has an active assignment and match belongs to host's mode
       if (!authUser.isAdmin) {
         const hostDoc = await firestore.collection('hosts').doc(authUser.uid).get();
-        if (!hostDoc.exists || hostDoc.data()?.assignmentStatus !== 'active' || hostDoc.data()?.matchId !== matchId) {
-          return res.status(403).json({ success: false, error: "Unauthorized: You are not the active host for this match" });
+        if (!hostDoc.exists || hostDoc.data()?.assignmentStatus !== 'active') {
+          return res.status(403).json({ success: false, error: "Unauthorized: No active host permissions found" });
+        }
+        const hostData = hostDoc.data();
+        const isPermitted = 
+          matchBelongsToMode(matchData, hostData?.modeId, hostData?.modeTitle) ||
+          hostData?.matchId === matchId;
+
+        if (!isPermitted) {
+          return res.status(403).json({ 
+            success: false, 
+            error: `Unauthorized: You are assigned to host mode "${hostData?.modeTitle || hostData?.modeId}", but match "${matchData?.title}" belongs to a different mode.` 
+          });
         }
       }
 
@@ -1260,13 +1304,12 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
 
       await firestore.collection('matches').doc(matchId).update(updatePayload);
 
-      const matchDoc = await firestore.collection('matches').doc(matchId).get();
       await firestore.collection('hostLogs').add({
         hostId: authUser.uid,
         hostEmail: authUser.email,
         hostName: authUser.email,
         matchId: matchId,
-        matchTitle: matchDoc.data()?.title || '',
+        matchTitle: matchData?.title || '',
         action: 'updated_room_credentials',
         details: {
           roomId,
@@ -1283,7 +1326,7 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
     }
   });
 
-  // 5. Host: Submit Match Result for Verification
+  // 5. Host: Submit Match Result for Verification (Mode-Authorized)
   serverApp.post("/api/host/submit-result", async (req, res) => {
     try {
       const authUser = await authenticateUser(req);
@@ -1296,13 +1339,6 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
         return res.status(400).json({ success: false, error: "matchId and results array are required" });
       }
 
-      if (!authUser.isAdmin) {
-        const hostDoc = await firestore.collection('hosts').doc(authUser.uid).get();
-        if (!hostDoc.exists || hostDoc.data()?.assignmentStatus !== 'active' || hostDoc.data()?.matchId !== matchId) {
-          return res.status(403).json({ success: false, error: "Unauthorized: You are not the active host for this match" });
-        }
-      }
-
       const matchDoc = await firestore.collection('matches').doc(matchId).get();
       if (!matchDoc.exists) {
         return res.status(404).json({ success: false, error: "Match not found" });
@@ -1310,6 +1346,25 @@ async function processZapUPIPayment(orderId: string, verifiedAmount: any, transa
       const matchData = matchDoc.data();
       if (matchData?.status === 'completed') {
         return res.status(400).json({ success: false, error: "Match has already been declared and completed" });
+      }
+
+      // Authorization: Check that host has an active assignment and match belongs to host's mode
+      if (!authUser.isAdmin) {
+        const hostDoc = await firestore.collection('hosts').doc(authUser.uid).get();
+        if (!hostDoc.exists || hostDoc.data()?.assignmentStatus !== 'active') {
+          return res.status(403).json({ success: false, error: "Unauthorized: No active host permissions found" });
+        }
+        const hostData = hostDoc.data();
+        const isPermitted = 
+          matchBelongsToMode(matchData, hostData?.modeId, hostData?.modeTitle) ||
+          hostData?.matchId === matchId;
+
+        if (!isPermitted) {
+          return res.status(403).json({ 
+            success: false, 
+            error: `Unauthorized: You can only submit results for matches belonging to your assigned mode (${hostData?.modeTitle || hostData?.modeId})` 
+          });
+        }
       }
 
       const submissionData = {

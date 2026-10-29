@@ -37,6 +37,7 @@ import {
   Swords,
   Clock
 } from 'lucide-react';
+import { getAllAvailableGameModes, getGameModeTitle, matchBelongsToMode } from '../utils/modeUtils';
 
 interface AdminUserDetailProps {
   onPageChange: (page: Page, id?: string) => void;
@@ -53,12 +54,12 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
 
-  // Host Management State
+  // Host Management State (Game Mode Based)
   const [hostAssignment, setHostAssignment] = useState<HostAssignment | null>(null);
   const [availableMatches, setAvailableMatches] = useState<Tournament[]>([]);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [isRemoveConfirmOpen, setIsRemoveConfirmOpen] = useState(false);
-  const [selectedMatchId, setSelectedMatchId] = useState('');
+  const [selectedModeId, setSelectedModeId] = useState('cs_headshot');
   const [isHostActionLoading, setIsHostActionLoading] = useState(false);
   const [hostFeedback, setHostFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -128,9 +129,6 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
           .map(d => ({ id: d.id, ...d.data() } as Tournament))
           .filter(m => m.status !== 'completed');
         setAvailableMatches(matches);
-        if (matches.length > 0) {
-          setSelectedMatchId(matches[0].id);
-        }
       } catch (err) {
         console.error("Error fetching available matches:", err);
       }
@@ -165,12 +163,13 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
     }
   };
 
-  // Host Action: Make Host
+  // Host Action: Make Host (Game Mode Based)
   const handleAssignHost = async () => {
-    if (!userId || !selectedMatchId || isHostActionLoading) return;
+    if (!userId || !selectedModeId || isHostActionLoading) return;
 
     setIsHostActionLoading(true);
     setHostFeedback(null);
+    const modeTitle = getGameModeTitle(selectedModeId);
 
     try {
       const token = await auth.currentUser?.getIdToken();
@@ -182,7 +181,8 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
         },
         body: JSON.stringify({
           hostUserId: userId,
-          matchId: selectedMatchId
+          modeId: selectedModeId,
+          modeTitle
         })
       });
 
@@ -190,7 +190,7 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
       if (data.success) {
         setHostFeedback({
           type: 'success',
-          message: data.message || 'Player successfully assigned as match host!'
+          message: data.message || `Player successfully designated as official Host for ${modeTitle}!`
         });
         setIsAssignModalOpen(false);
       } else {
@@ -226,8 +226,7 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          hostUserId: userId,
-          matchId: hostAssignment?.matchId
+          hostUserId: userId
         })
       });
 
@@ -442,12 +441,14 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
             {hostAssignment ? (
               <div className="space-y-1.5 pt-2 border-t border-neutral-800/80">
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-neutral-400">Assigned Match:</span>
-                  <span className="font-black text-white italic">{hostAssignment.matchTitle || hostAssignment.matchId}</span>
+                  <span className="text-neutral-400">Assigned Mode:</span>
+                  <span className="font-black text-emerald-400 italic">
+                    {hostAssignment.modeTitle || hostAssignment.modeId || hostAssignment.matchTitle || 'Active Mode'}
+                  </span>
                 </div>
                 <div className="flex justify-between items-center text-xs font-mono">
-                  <span className="text-neutral-400">Match ID:</span>
-                  <span className="text-emerald-400 font-bold">{hostAssignment.matchId}</span>
+                  <span className="text-neutral-400">Mode ID:</span>
+                  <span className="text-neutral-300 font-bold">{hostAssignment.modeId || hostAssignment.matchId}</span>
                 </div>
                 {hostAssignment.assignedByAdminEmail && (
                   <div className="flex justify-between items-center text-[10px]">
@@ -458,7 +459,7 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
               </div>
             ) : (
               <p className="text-[11px] text-neutral-500 mt-1">
-                This player does not currently have any active match hosting assignments.
+                This player is not currently assigned to host any game mode.
               </p>
             )}
           </div>
@@ -665,68 +666,60 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
                 <Gamepad2 size={28} />
               </div>
 
-              <h2 className="text-xl font-black text-white italic mb-1">Make Match Host</h2>
+              <h2 className="text-xl font-black text-white italic mb-1">Make Game Mode Host</h2>
               <p className="text-xs text-neutral-400 mb-6">
-                Assign <span className="text-emerald-400 font-bold">{userData.username}</span> (ID: <span className="font-mono text-neutral-300">{userId}</span>) to manage an official match.
+                Assign <span className="text-emerald-400 font-bold">{userData.username}</span> (ID: <span className="font-mono text-neutral-300">{userId}</span>) to manage matches for an official game mode.
               </p>
 
-              {availableMatches.length === 0 ? (
-                <div className="bg-neutral-950 border border-neutral-800 rounded-2xl p-6 text-center mb-6">
-                  <Swords size={28} className="text-neutral-600 mx-auto mb-2" />
-                  <p className="text-xs text-neutral-400">No active or upcoming matches available for host assignment.</p>
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 mb-2">
+                    Select Canonical Game Mode
+                  </label>
+                  <select
+                    value={selectedModeId}
+                    onChange={(e) => setSelectedModeId(e.target.value)}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-2xl px-4 py-3.5 text-xs text-white font-medium focus:outline-none focus:border-emerald-500"
+                  >
+                    {getAllAvailableGameModes().map((m) => (
+                      <option key={m.id} value={m.id} className="bg-neutral-900 text-white">
+                        {m.title} ({m.category} • ID: {m.id})
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              ) : (
-                <div className="space-y-4 mb-6">
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-neutral-400 mb-2">
-                      Select Eligible Tournament Match
-                    </label>
-                    <select
-                      value={selectedMatchId}
-                      onChange={(e) => setSelectedMatchId(e.target.value)}
-                      className="w-full bg-neutral-950 border border-neutral-800 rounded-2xl px-4 py-3.5 text-xs text-white font-medium focus:outline-none focus:border-emerald-500"
-                    >
-                      {availableMatches.map((m) => (
-                        <option key={m.id} value={m.id} className="bg-neutral-900 text-white">
-                          {m.title} ({m.section || m.mode || 'BR'} - ₹{m.entryFee})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
 
-                  {/* Selected Match Details Preview */}
-                  {(() => {
-                    const sel = availableMatches.find(m => m.id === selectedMatchId);
-                    if (!sel) return null;
-                    return (
-                      <div className="bg-neutral-950/80 border border-neutral-800 rounded-2xl p-4 text-xs space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-neutral-500">Match Name:</span>
-                          <span className="text-white font-black italic">{sel.title}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-neutral-500">Game Mode:</span>
-                          <span className="text-emerald-400 uppercase font-black text-[10px]">{sel.section || sel.mode}</span>
-                        </div>
-                        <div className="flex justify-between items-center font-mono text-[11px]">
-                          <span className="text-neutral-500">Match ID:</span>
-                          <span className="text-neutral-300">{sel.id}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-neutral-500">Scheduled Time:</span>
-                          <span className="text-white">{sel.time}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-neutral-500">Current Status:</span>
-                          <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            {sel.status || 'Active'}
-                          </span>
-                        </div>
+                {/* Selected Mode Details Preview */}
+                {(() => {
+                  const sel = getAllAvailableGameModes().find(m => m.id === selectedModeId);
+                  const matchingCount = availableMatches.filter(m => matchBelongsToMode(m, selectedModeId, sel?.title)).length;
+                  return (
+                    <div className="bg-neutral-950/80 border border-neutral-800 rounded-2xl p-4 text-xs space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-neutral-500">Selected Mode:</span>
+                        <span className="text-emerald-400 font-black italic">{sel?.title || selectedModeId}</span>
                       </div>
-                    );
-                  })()}
-                </div>
-              )}
+                      <div className="flex justify-between items-center">
+                        <span className="text-neutral-500">Category:</span>
+                        <span className="text-white uppercase font-black text-[10px]">{sel?.category || 'Custom'}</span>
+                      </div>
+                      <div className="flex justify-between items-center font-mono text-[11px]">
+                        <span className="text-neutral-500">Mode ID:</span>
+                        <span className="text-neutral-300">{selectedModeId}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-neutral-500">Active Matches in Mode:</span>
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          {matchingCount} matches ready
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-neutral-400 pt-1 border-t border-neutral-800/80">
+                        Host will be authorized to update room details and submit scorecards for all matches in this mode.
+                      </p>
+                    </div>
+                  );
+                })()}
+              </div>
 
               <div className="flex gap-3">
                 <button
@@ -740,13 +733,13 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
                 <button
                   type="button"
                   onClick={handleAssignHost}
-                  disabled={availableMatches.length === 0 || isHostActionLoading}
+                  disabled={isHostActionLoading}
                   className="flex-1 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-black uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {isHostActionLoading ? (
                     <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    'Confirm Assignment'
+                    'Confirm Mode Host'
                   )}
                 </button>
               </div>
@@ -778,7 +771,7 @@ export default function AdminUserDetail({ onPageChange }: AdminUserDetailProps) 
 
               <h2 className="text-xl font-black text-white italic mb-2">Revoke Host Privileges?</h2>
               <p className="text-xs text-neutral-400 mb-6 leading-relaxed">
-                Are you sure you want to remove host status from <span className="text-white font-bold">{userData.username}</span> for match <span className="text-emerald-400 font-bold">"{hostAssignment?.matchTitle || hostAssignment?.matchId}"</span>? They will immediately lose room management access.
+                Are you sure you want to remove host status from <span className="text-white font-bold">{userData.username}</span> for game mode <span className="text-emerald-400 font-bold">"{hostAssignment?.modeTitle || hostAssignment?.modeId || hostAssignment?.matchTitle}"</span>? They will immediately lose mode match management access.
               </p>
 
               <div className="flex gap-3">
